@@ -2,7 +2,7 @@
 "use client";
 
 import { useState, useEffect, useCallback, useRef } from "react";
-import type { Node, Edge, Packet, Algorithm, RipRoutingTable } from "@/lib/types";
+import type { Node, Edge, Packet, Algorithm } from "@/lib/types";
 import { SimulationControls } from "@/components/simulation-controls";
 import { NetworkCanvas } from "@/components/network-canvas";
 import { ExplanationPanel } from "@/components/explanation-panel";
@@ -11,10 +11,10 @@ import { Logo } from "@/components/icons";
 import { useToast } from "@/hooks/use-toast";
 
 const INITIAL_NODES: Node[] = [
-  { id: 'A', x: 200, y: 250, routingTable: {} },
-  { id: 'B', x: 450, y: 150, routingTable: {} },
-  { id: 'C', x: 450, y: 350, routingTable: {} },
-  { id: 'D', x: 700, y: 250, routingTable: {} },
+  { id: 'A', x: 150, y: 250, routingTable: {} },
+  { id: 'B', x: 400, y: 150, routingTable: {} },
+  { id: 'C', x: 400, y: 350, routingTable: {} },
+  { id: 'D', x: 650, y: 250, routingTable: {} },
 ];
 
 const INITIAL_EDGES: Edge[] = [
@@ -41,13 +41,21 @@ export default function Home() {
   const { toast } = useToast();
 
   const addLog = useCallback((newLog: string) => {
-    setLog(prevLog => [...prevLog.slice(-MAX_LOG_ENTRIES + 1), newLog]);
+    setLog(prevLog => {
+        const updatedLog = [...prevLog, newLog];
+        if (updatedLog.length > MAX_LOG_ENTRIES) {
+            return updatedLog.slice(updatedLog.length - MAX_LOG_ENTRIES);
+        }
+        return updatedLog;
+    });
   }, []);
+
 
   const resetSimulation = useCallback(() => {
     setIsRunning(false);
     setIsSimulating(false);
-    setNodes(JSON.parse(JSON.stringify(INITIAL_NODES.map(n => ({...n, routingTable: {}})))));
+    const initialNodes = JSON.parse(JSON.stringify(INITIAL_NODES));
+    setNodes(initialNodes.map((n: Node) => ({...n, routingTable: { [n.id]: { destination: n.id, nextHop: n.id, cost: 0 }} })));
     setEdges(JSON.parse(JSON.stringify(INITIAL_EDGES)));
     setPackets([]);
     setLog([]);
@@ -64,111 +72,98 @@ export default function Home() {
     if (!isRunning) return;
 
     const runRipStep = () => {
-      const step = simulationStep.current;
-      const updatingNodeId = nodes[step % nodes.length]?.id;
-      if (!updatingNodeId) return;
-
-      let hasChanged = false;
-
-      // 1. Initialize self-route if it doesn't exist
+      let somethingChangedThisStep = false;
+      
+      // Update nodes based on received packets
       setNodes(currentNodes => {
-        const nodeToUpdate = currentNodes.find(n => n.id === updatingNodeId);
-        if (nodeToUpdate && (!nodeToUpdate.routingTable[updatingNodeId] || nodeToUpdate.routingTable[updatingNodeId].cost !== 0)) {
-           hasChanged = true;
-           return currentNodes.map(n => {
-            if (n.id === updatingNodeId) {
-              const newTable = { ...n.routingTable, [n.id]: { destination: n.id, nextHop: n.id, cost: 0 }};
-              addLog(`Router ${n.id} initialized its routing table.`);
-              return { ...n, routingTable: newTable };
-            }
-            return n;
-          });
+        const finishedPackets = packets.filter(p => p.progress >= 1 && p.type === 'rip');
+        if (finishedPackets.length === 0) {
+            // If no packets, check for convergence below
+            return currentNodes;
         }
-        return currentNodes;
-      });
 
-      // 2. Send routing table to neighbors
-      const fromNode = nodes.find(n => n.id === updatingNodeId);
-      if (fromNode) {
-        const neighbors = edges
-          .filter(e => e.active && (e.from === fromNode.id || e.to === fromNode.id))
-          .map(e => (e.from === fromNode.id ? e.to : e.from));
-
-        if (neighbors.length > 0) {
-          addLog(`Router ${fromNode.id} sends routing update to neighbors: ${neighbors.join(', ')}.`);
-          const newPackets: Packet[] = neighbors.map(neighborId => {
-            const toNode = nodes.find(n => n.id === neighborId)!;
-            return {
-              id: `pkt-${Date.now()}-${Math.random()}`,
-              from: fromNode.id,
-              to: neighborId,
-              type: 'rip',
-              data: fromNode.routingTable,
-              progress: 0,
-              path: [{ x: fromNode.x, y: fromNode.y }, { x: toNode.x, y: toNode.y }]
-            };
-          });
-          setPackets(p => [...p, ...newPackets]);
-        }
-      }
-
-      // 3. Process received packets and update tables (Bellman-Ford logic)
-      setNodes(currentNodes => {
-        let nodesChangedInStep = false;
+        let nodesChanged = false;
         const updatedNodes = JSON.parse(JSON.stringify(currentNodes));
 
-        const activePackets = packets.filter(p => p.type === 'rip' && p.progress < 1);
+        for (const packet of finishedPackets) {
+            const receivingNode = updatedNodes.find((n: Node) => n.id === packet.to);
+            if (!receivingNode) continue;
+            
+            const senderNodeId = packet.from;
+            const linkCost = edges.find(e => ((e.from === senderNodeId && e.to === receivingNode.id) || (e.from === receivingNode.id && e.to === senderNodeId)) && e.active)?.cost ?? Infinity;
+            
+            if (linkCost === Infinity) continue;
+            
+            const senderTable = packet.data as { [key: string]: { destination: string; nextHop: string; cost: number } };
+            let tableUpdated = false;
 
-        activePackets.forEach(packet => {
-          const receivingNode = updatedNodes.find((n: Node) => n.id === packet.to);
-          if (!receivingNode) return;
+            for (const dest in senderTable) {
+                const sentRoute = senderTable[dest];
+                const newCost = sentRoute.cost + linkCost;
 
-          const senderNodeId = packet.from;
-          const linkCost = edges.find(e => (e.from === senderNodeId && e.to === receivingNode.id) || (e.from === receivingNode.id && e.to === senderNodeId))?.cost ?? 1;
-          const senderTable = packet.data as { [key: string]: { destination: string; nextHop: string; cost: number } };
+                if (newCost >= 16) continue;
 
-          let tableUpdated = false;
+                const existingRoute = receivingNode.routingTable[dest];
 
-          // Update based on sender's table
-          for (const dest in senderTable) {
-            const sentRoute = senderTable[dest];
-            const newCost = sentRoute.cost + linkCost;
-
-            if (newCost >= 16) continue;
-
-            const existingRoute = receivingNode.routingTable[dest];
-
-            if (!existingRoute || newCost < existingRoute.cost) {
-              receivingNode.routingTable[dest] = { destination: dest, nextHop: senderNodeId, cost: newCost };
-              tableUpdated = true;
-            } else if (existingRoute.nextHop === senderNodeId && newCost !== existingRoute.cost) {
-              // If the path is through the sender, update the cost regardless
-              receivingNode.routingTable[dest] = { ...existingRoute, cost: newCost };
-              tableUpdated = true;
+                if (!existingRoute || newCost < existingRoute.cost) {
+                    receivingNode.routingTable[dest] = { destination: dest, nextHop: senderNodeId, cost: newCost };
+                    tableUpdated = true;
+                } else if (existingRoute.nextHop === senderNodeId && existingRoute.cost !== newCost) {
+                     receivingNode.routingTable[dest] = { destination: dest, nextHop: senderNodeId, cost: newCost };
+                     tableUpdated = true;
+                }
             }
-          }
-          
-          if (tableUpdated) {
-            addLog(`Router ${receivingNode.id}'s table updated based on info from ${senderNodeId}.`);
-            nodesChangedInStep = true;
-            hasChanged = true;
-          }
-        });
-
-        if (nodesChangedInStep) {
-          return updatedNodes;
+            if (tableUpdated) {
+                addLog(`Router ${receivingNode.id}'s table updated by ${senderNodeId}.`);
+                nodesChanged = true;
+                somethingChangedThisStep = true;
+            }
         }
+        
+        if(nodesChanged) return updatedNodes;
         return currentNodes;
       });
+
+      // After processing packets, send out new ones
+      setNodes(currentNodes => {
+          const updatingNodeId = currentNodes[simulationStep.current % currentNodes.length]?.id;
+          if (!updatingNodeId) return currentNodes;
+
+          const fromNode = currentNodes.find(n => n.id === updatingNodeId);
+          if (fromNode) {
+              const neighbors = edges
+                  .filter(e => e.active && (e.from === fromNode.id || e.to === fromNode.id))
+                  .map(e => (e.from === fromNode.id ? e.to : e.from));
+
+              if (neighbors.length > 0) {
+                  addLog(`Router ${fromNode.id} sends routing update to neighbors: ${neighbors.join(', ')}.`);
+                  somethingChangedThisStep = true;
+                  const newPackets: Packet[] = neighbors.map(neighborId => {
+                      const toNode = currentNodes.find(n => n.id === neighborId)!;
+                      return {
+                          id: `pkt-${Date.now()}-${Math.random()}`,
+                          from: fromNode.id,
+                          to: neighborId,
+                          type: 'rip',
+                          data: fromNode.routingTable,
+                          progress: 0,
+                          path: [{ x: fromNode.x, y: fromNode.y }, { x: toNode.x, y: toNode.y }]
+                      };
+                  });
+                  setPackets(p => [...p, ...newPackets]);
+              }
+          }
+          return currentNodes;
+      });
       
-      if (!hasChanged) {
+      if (!somethingChangedThisStep) {
         convergenceCounter.current++;
       } else {
-        convergenceCounter.current = 0; // Reset if any change occurred
+        convergenceCounter.current = 0;
       }
-
+      
       // If no changes for a full round of nodes, assume convergence
-      if (convergenceCounter.current >= nodes.length) {
+      if (convergenceCounter.current >= nodes.length * 2) {
         addLog("Network has converged. Simulation paused.");
         setIsRunning(false);
       }
@@ -182,7 +177,7 @@ export default function Home() {
         setIsRunning(false);
       }
       simulationStep.current++;
-    }, 2000 / speed);
+    }, 1000 / speed);
 
     return () => clearInterval(interval);
   }, [isRunning, nodes, edges, speed, algorithm, packets, toast, addLog]);
@@ -192,31 +187,25 @@ export default function Home() {
     let animationFrameId: number;
     const animate = () => {
         setPackets(currentPackets => {
-            const newPackets = currentPackets
+            return currentPackets
                 .map(p => ({ ...p, progress: p.progress + 0.01 * speed }))
-                .filter(p => p.progress < 1);
-
-            // If a packet finishes, process its effect
-            const finishedPackets = currentPackets.filter(p => p.progress >= 1);
-            if (finishedPackets.length > 0) {
-              // The logic to update tables is now inside the main simulation loop
-              // This just clears the packet from animation
-            }
-            return newPackets;
+                .filter(p => p.progress <= 1);
         });
         animationFrameId = requestAnimationFrame(animate);
     };
 
-    if (packets.length > 0 || isRunning) {
+    if (isRunning) { // Animate only when simulation is running
         animationFrameId = requestAnimationFrame(animate);
+    } else {
+        setPackets([]); // Clear packets when paused
     }
     
     return () => cancelAnimationFrame(animationFrameId);
-  }, [packets, speed, isRunning]);
+  }, [speed, isRunning]);
 
 
   const handleRunPause = () => {
-    if (!isSimulating) {
+    if (!isRunning && !isSimulating) {
         setIsSimulating(true);
         addLog("Simulation started with RIP algorithm.");
     }
@@ -235,7 +224,8 @@ export default function Home() {
 
   const handleNodeAdd = (x: number, y: number) => {
     if (isSimulating) return;
-    const newNode: Node = { id: getNextNodeId(), x, y, routingTable: {} };
+    const newNodeId = getNextNodeId();
+    const newNode: Node = { id: newNodeId, x, y, routingTable: { [newNodeId]: { destination: newNodeId, nextHop: newNodeId, cost: 0 } } };
     setNodes(prev => [...prev, newNode]);
   };
 
@@ -263,31 +253,29 @@ export default function Home() {
      setEdges(prev => prev.map(e => {
        if (e.id === id) {
          const newEdge = { ...e, active: !e.active };
-         const edgeNodes = [newEdge.from, newEdge.to];
-         
-         if (!newEdge.active) { // if link is deactivated
-           addLog(`Link ${id} was deactivated. Convergence will begin.`);
-           // Set routes through this link to infinity (16)
-           setNodes(currentNodes => currentNodes.map(node => {
-              const newRoutingTable = { ...node.routingTable };
-              let tableChanged = false;
-              Object.keys(newRoutingTable).forEach(dest => {
-                const route = newRoutingTable[dest];
-                // If route goes through one of the edge nodes to reach the other
-                if ((route.nextHop === edgeNodes[0] && dest === edgeNodes[1]) || (route.nextHop === edgeNodes[1] && dest === edgeNodes[0])) {
-                   newRoutingTable[dest] = { ...route, cost: 16 };
-                   tableChanged = true;
+         if (!newEdge.active) {
+            addLog(`Link ${id} was deactivated. Routing tables will be updated.`);
+            // Set routes using this link to infinity(16) for relevant nodes
+            setNodes(currentNodes => currentNodes.map(node => {
+                const newTable = { ...node.routingTable };
+                let updated = false;
+                Object.keys(newTable).forEach(dest => {
+                    if (newTable[dest].nextHop === newEdge.from || newTable[dest].nextHop === newEdge.to) {
+                        const destinationNode = nodes.find(n => n.id === dest);
+                        const edgeNodes = [newEdge.from, newEdge.to];
+                        if(edgeNodes.includes(destinationNode?.id ?? '')) {
+                           newTable[dest] = { ...newTable[dest], cost: 16 };
+                           updated = true;
+                        }
+                    }
+                });
+                if(updated) {
+                    addLog(`Router ${node.id} updated its table due to link deactivation.`);
                 }
-                // Poison reverse: If a node sends updates about a destination to its own next-hop for that destination
-                if(newRoutingTable[dest].nextHop === edgeNodes[0] || newRoutingTable[dest].nextHop === edgeNodes[1]){
-                    // This is more complex, for now we will just rely on count to infinity
-                }
-              });
-              return { ...node, routingTable: newRoutingTable };
-           }));
+                return { ...node, routingTable: updated ? newTable : node.routingTable };
+            }));
          } else {
            addLog(`Link ${id} was activated.`);
-           // When link is re-activated, convergence will naturally fix the tables.
          }
          return newEdge;
        }
@@ -334,5 +322,3 @@ export default function Home() {
     </div>
   );
 }
-
-    

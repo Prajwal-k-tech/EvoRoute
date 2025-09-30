@@ -38,11 +38,12 @@ const explanations = {
 
 export function ExplanationPanel({ algorithm, log }: ExplanationPanelProps) {
   const content = explanations[algorithm];
-  const scrollAreaRef = useRef<HTMLDivElement>(null);
+  const scrollViewportRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    if (scrollAreaRef.current) {
-      scrollAreaRef.current.scrollTo({ top: scrollAreaRef.current.scrollHeight, behavior: 'smooth' });
+    if (scrollViewportRef.current) {
+        const { scrollHeight, clientHeight } = scrollViewportRef.current;
+        scrollViewportRef.current.scrollTo({ top: scrollHeight - clientHeight, behavior: 'smooth' });
     }
   }, [log]);
 
@@ -66,8 +67,8 @@ export function ExplanationPanel({ algorithm, log }: ExplanationPanelProps) {
           <CardTitle>Simulation Log</CardTitle>
           <CardDescription>What's happening in the network right now.</CardDescription>
         </CardHeader>
-        <CardContent className="flex-1 p-0">
-          <ScrollArea className="h-full px-6 pb-6" ref={scrollAreaRef}>
+        <CardContent className="flex-1 p-0 overflow-hidden">
+          <ScrollArea className="h-full px-6 pb-6" viewportRef={scrollViewportRef}>
             <div className="space-y-2">
             {log.length === 0 && <p className="text-sm text-muted-foreground">Run the simulation to see the log.</p>}
               {log.map((entry, i) => (
@@ -83,5 +84,3 @@ export function ExplanationPanel({ algorithm, log }: ExplanationPanelProps) {
     </div>
   );
 }
-
-    
