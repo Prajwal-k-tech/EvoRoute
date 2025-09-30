@@ -16,11 +16,11 @@ const explanations = {
     title: "Routing Information Protocol (RIP)",
     description: "A distance-vector routing protocol.",
     details: [
-      "RIP uses hop count as its routing metric.",
-      "Routers periodically send their entire routing table to their neighbors (every 30 seconds, accelerated here).",
-      "It uses the Bellman-Ford algorithm to calculate the best path.",
-      "RIP has a maximum hop count of 15 to prevent routing loops. A hop count of 16 is considered infinite (unreachable).",
-      "Subject to the 'counting to infinity' problem, where it slowly converges after a link failure.",
+      "RIP uses hop count as its routing metric, where each link has a cost of 1.",
+      "Routers periodically send their entire routing table to their immediate neighbors.",
+      "It is a distributed application of the Bellman-Ford algorithm, used to calculate the shortest path.",
+      "RIP has a maximum hop count of 15. A hop count of 16 is considered infinite, meaning the destination is unreachable.",
+      "It is prone to the 'counting to infinity' problem, which can cause slow convergence after a network change.",
     ],
   },
   ospf: {
@@ -28,10 +28,10 @@ const explanations = {
     description: "A link-state routing protocol. (Coming Soon)",
     details: [
       "OSPF builds a complete map (topology) of the network in its link-state database.",
-      "When a link state changes, the router floods a Link State Advertisement (LSA) to all other routers.",
+      "When a link state changes, the router floods a Link State Advertisement (LSA) to all other routers in the same area.",
       "It uses Dijkstra's algorithm to calculate the shortest path to all destinations.",
-      "It converges much faster than RIP and is not prone to the 'counting to infinity' problem.",
-      "OSPF is more complex and requires more CPU and memory than RIP.",
+      "OSPF converges much faster than RIP and is less prone to routing loops.",
+      "It is more complex and resource-intensive than RIP, but is highly scalable for large networks.",
     ],
   },
 };
@@ -42,8 +42,8 @@ export function ExplanationPanel({ algorithm, log }: ExplanationPanelProps) {
 
   useEffect(() => {
     if (scrollViewportRef.current) {
-        const { scrollHeight, clientHeight } = scrollViewportRef.current;
-        scrollViewportRef.current.scrollTo({ top: scrollHeight - clientHeight, behavior: 'smooth' });
+        const { scrollHeight } = scrollViewportRef.current;
+        scrollViewportRef.current.scrollTo({ top: scrollHeight, behavior: 'smooth' });
     }
   }, [log]);
 
