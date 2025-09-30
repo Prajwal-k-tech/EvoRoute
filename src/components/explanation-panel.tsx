@@ -1,8 +1,10 @@
+
 "use client";
 
-import type { Algorithm } from "@/lib/types";
+import { Algorithm } from "@/lib/types";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { useEffect, useRef } from "react";
 
 interface ExplanationPanelProps {
   algorithm: Algorithm;
@@ -23,7 +25,7 @@ const explanations = {
   },
   ospf: {
     title: "Open Shortest Path First (OSPF)",
-    description: "A link-state routing protocol.",
+    description: "A link-state routing protocol. (Coming Soon)",
     details: [
       "OSPF builds a complete map (topology) of the network in its link-state database.",
       "When a link state changes, the router floods a Link State Advertisement (LSA) to all other routers.",
@@ -36,9 +38,17 @@ const explanations = {
 
 export function ExplanationPanel({ algorithm, log }: ExplanationPanelProps) {
   const content = explanations[algorithm];
+  const scrollAreaRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (scrollAreaRef.current) {
+      scrollAreaRef.current.scrollTo({ top: scrollAreaRef.current.scrollHeight, behavior: 'smooth' });
+    }
+  }, [log]);
+
   return (
-    <div className="flex flex-col gap-4 h-full">
-      <Card>
+    <div className="flex flex-col md:flex-row gap-4 h-full">
+      <Card className="md:w-1/2">
         <CardHeader>
           <CardTitle>{content.title}</CardTitle>
           <CardDescription>{content.description}</CardDescription>
@@ -51,13 +61,13 @@ export function ExplanationPanel({ algorithm, log }: ExplanationPanelProps) {
           </ul>
         </CardContent>
       </Card>
-      <Card className="flex-1 flex flex-col min-h-0">
+      <Card className="flex-1 flex flex-col min-h-0 md:w-1/2">
         <CardHeader>
           <CardTitle>Simulation Log</CardTitle>
           <CardDescription>What's happening in the network right now.</CardDescription>
         </CardHeader>
         <CardContent className="flex-1 p-0">
-          <ScrollArea className="h-full px-6 pb-6">
+          <ScrollArea className="h-full px-6 pb-6" ref={scrollAreaRef}>
             <div className="space-y-2">
             {log.length === 0 && <p className="text-sm text-muted-foreground">Run the simulation to see the log.</p>}
               {log.map((entry, i) => (
@@ -73,3 +83,5 @@ export function ExplanationPanel({ algorithm, log }: ExplanationPanelProps) {
     </div>
   );
 }
+
+    

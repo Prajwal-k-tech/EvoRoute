@@ -1,3 +1,4 @@
+
 export type Algorithm = "rip" | "ospf";
 
 export interface Node {
@@ -31,4 +32,8 @@ export type RipRoute = {
   cost: number;
 };
 
-export type RipRoutingTable = RipRoute[];
+export type RipRoutingTable = {
+    [destination: string]: RipRoute;
+};
+
+    
