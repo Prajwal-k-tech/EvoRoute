@@ -16,11 +16,11 @@ const explanations = {
     title: "Routing Information Protocol (RIP)",
     description: "A distance-vector routing protocol.",
     details: [
-      "RIP uses hop count as its routing metric, where each link has a cost of 1.",
-      "Routers periodically send their entire routing table to their immediate neighbors.",
-      "It is a distributed application of the Bellman-Ford algorithm, used to calculate the shortest path.",
-      "RIP has a maximum hop count of 15. A hop count of 16 is considered infinite, meaning the destination is unreachable.",
-      "It is prone to the 'counting to infinity' problem, which can cause slow convergence after a network change.",
+      "RIP uses hop count as its only routing metric. Each link between routers has a cost of 1.",
+      "It is a distributed application of the Bellman-Ford algorithm. Routers share their entire routing table with immediate neighbors every 30 seconds (accelerated in this simulation).",
+      "By receiving tables from neighbors, a router learns about the total cost (hop count) to reach destinations and chooses the path with the lowest cost.",
+      "RIP has a maximum hop count of 15. A hop count of 16 is considered infinite, marking a destination as unreachable.",
+      "It can be slow to converge after a network change and is susceptible to the 'counting to infinity' problem.",
     ],
   },
   ospf: {
@@ -42,8 +42,7 @@ export function ExplanationPanel({ algorithm, log }: ExplanationPanelProps) {
 
   useEffect(() => {
     if (scrollViewportRef.current) {
-        const { scrollHeight } = scrollViewportRef.current;
-        scrollViewportRef.current.scrollTo({ top: scrollHeight, behavior: 'smooth' });
+        scrollViewportRef.current.scrollTo({ top: 0, behavior: 'smooth' });
     }
   }, [log]);
 
@@ -73,7 +72,6 @@ export function ExplanationPanel({ algorithm, log }: ExplanationPanelProps) {
             {log.length === 0 && <p className="text-sm text-muted-foreground">Run the simulation to see the log.</p>}
               {log.map((entry, i) => (
                 <div key={i} className="text-sm font-code">
-                  <span className="text-primary mr-2">[{i+1}]</span>
                   {entry}
                 </div>
               ))}
