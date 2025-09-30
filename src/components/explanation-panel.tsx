@@ -14,13 +14,13 @@ interface ExplanationPanelProps {
 const explanations = {
   rip: {
     title: "Routing Information Protocol (RIP)",
-    description: "A distance-vector routing protocol.",
+    description: "A classic distance-vector routing protocol.",
     details: [
-      "RIP uses hop count as its only routing metric. Each link between routers has a cost of 1.",
-      "It is a distributed application of the Bellman-Ford algorithm. Routers share their entire routing table with immediate neighbors every 30 seconds (accelerated in this simulation).",
-      "By receiving tables from neighbors, a router learns about the total cost (hop count) to reach destinations and chooses the path with the lowest cost.",
-      "RIP has a maximum hop count of 15. A hop count of 16 is considered infinite, marking a destination as unreachable.",
-      "It can be slow to converge after a network change and is susceptible to the 'counting to infinity' problem.",
+      "RIP uses hop count as its sole routing metric. Every link between routers has a cost of 1 hop.",
+      "It is a distributed application of the Bellman-Ford algorithm. Routers periodically share their entire routing table with their immediate neighbors.",
+      "By receiving a neighbor's table, a router learns about the total cost (hop count) to reach all network destinations via that neighbor and updates its own table if a shorter path is found.",
+      "RIP has a maximum hop count of 15. Any route with a cost of 16 is considered infinite, marking that destination as unreachable.",
+      "It can be slow to converge after a network change and is susceptible to the 'counting to infinity' problem, where routers can get stuck in a loop advertising increasing costs.",
     ],
   },
   ospf: {
@@ -48,12 +48,12 @@ export function ExplanationPanel({ algorithm, log }: ExplanationPanelProps) {
 
   return (
     <div className="flex flex-col md:flex-row gap-4 h-full">
-      <Card className="md:w-1/2">
+      <Card className="md:w-1/2 flex flex-col">
         <CardHeader>
           <CardTitle>{content.title}</CardTitle>
           <CardDescription>{content.description}</CardDescription>
         </CardHeader>
-        <CardContent>
+        <CardContent className="flex-1">
           <ul className="space-y-2 text-sm text-muted-foreground list-disc pl-5">
             {content.details.map((item, i) => (
               <li key={i}>{item}</li>
@@ -82,3 +82,5 @@ export function ExplanationPanel({ algorithm, log }: ExplanationPanelProps) {
     </div>
   );
 }
+
+    
