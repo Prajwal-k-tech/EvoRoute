@@ -2,7 +2,7 @@
 "use client";
 
 import { useState, useEffect, useCallback, useRef } from "react";
-import type { Node, Edge, Packet, Algorithm, RipRoutingTable } from "@/lib/types";
+import type { Node, Edge, Packet, Algorithm, RipRoutingTable, OspfRoutingTable, LinkStateAdvertisement, OspfNodeData, ShortestPathNode } from "@/lib/types";
 import { SimulationControls } from "@/components/simulation-controls";
 import { NetworkCanvas } from "@/components/network-canvas";
 import { ExplanationPanel } from "@/components/explanation-panel";
@@ -73,13 +73,32 @@ export default function Home() {
     setIsRunning(false);
     setIsSimulating(false);
     const initialNodes = JSON.parse(JSON.stringify(INITIAL_NODES));
-    setNodes(initialNodes.map((n: Node) => ({...n, routingTable: { [n.id]: { destination: n.id, nextHop: n.id, cost: 0 }} })));
+    
+    if (algorithm === 'rip') {
+      setNodes(initialNodes.map((n: Node) => ({
+        ...n, 
+        routingTable: { [n.id]: { destination: n.id, nextHop: n.id, cost: 0 } }
+      })));
+    } else if (algorithm === 'ospf') {
+      setNodes(initialNodes.map((n: Node) => ({
+        ...n,
+        routingTable: { [n.id]: { destination: n.id, nextHop: n.id, cost: 0 } },
+        ospfData: {
+          routerId: n.id,
+          area: "0.0.0.0",
+          linkStateDatabase: {},
+          neighbors: [],
+          shortestPathTree: []
+        }
+      })));
+    }
+    
     setEdges(JSON.parse(JSON.stringify(INITIAL_EDGES)));
     setPackets([]);
     setLog([]);
     simulationStep.current = 0;
     convergenceCounter.current = 0;
-  }, []);
+  }, [algorithm]);
 
   useEffect(() => {
     resetSimulation();
@@ -201,6 +220,191 @@ export default function Home() {
     simulationStep.current++;
   }, [addLog]);
 
+  // OSPF Implementation
+  const runOspfStep = useCallback(() => {
+    let somethingChangedInNetwork = false;
+    let newLogs: string[] = [];
+
+    // 1. Process finished LSA packets
+    const finishedPackets = packetsRef.current.filter(p => p.progress >= 1 && p.type === 'ospf-lsa');
+
+    if (finishedPackets.length > 0) {
+      setNodes(currentNodes => {
+        const updatedNodes = JSON.parse(JSON.stringify(currentNodes));
+        let anyLSDBUpdated = false;
+
+        for (const packet of finishedPackets) {
+          const receivingNode = updatedNodes.find((n: Node) => n.id === packet.to);
+          if (!receivingNode || !receivingNode.ospfData) continue;
+
+          const lsa = packet.data as LinkStateAdvertisement;
+          const existingLSA = receivingNode.ospfData.linkStateDatabase[lsa.routerId];
+          
+          // Install LSA if it's new or newer
+          if (!existingLSA || lsa.sequenceNumber > existingLSA.sequenceNumber) {
+            receivingNode.ospfData.linkStateDatabase[lsa.routerId] = lsa;
+            newLogs.push(`Router ${receivingNode.id} received LSA from ${lsa.routerId}.`);
+            anyLSDBUpdated = true;
+          }
+        }
+
+        if (anyLSDBUpdated) {
+          somethingChangedInNetwork = true;
+          // Recalculate routing tables using Dijkstra
+          updatedNodes.forEach((node: Node) => {
+            if (node.ospfData) {
+              const newRoutingTable = calculateOspfRoutes(node, updatedNodes, edgesRef.current);
+              node.routingTable = newRoutingTable;
+            }
+          });
+        }
+
+        return anyLSDBUpdated ? updatedNodes : currentNodes;
+      });
+    }
+
+    // Clear processed packets
+    setPackets(currentPackets => currentPackets.filter(p => p.progress < 1));
+
+    // 2. Generate and flood LSAs
+    const currentNodes = nodesRef.current;
+    if (currentNodes.length > 0) {
+      const updatingNodeIndex = simulationStep.current % currentNodes.length;
+      const fromNode = currentNodes[updatingNodeIndex];
+
+      if (fromNode && fromNode.ospfData) {
+        // Create LSA for this node
+        const neighbors = edgesRef.current
+          .filter(e => e.active && (e.from === fromNode.id || e.to === fromNode.id))
+          .map(e => ({
+            to: e.from === fromNode.id ? e.to : e.from,
+            cost: e.cost,
+            active: e.active
+          }));
+
+        const lsa: LinkStateAdvertisement = {
+          routerId: fromNode.id,
+          sequenceNumber: (fromNode.ospfData.linkStateDatabase[fromNode.id]?.sequenceNumber || 0) + 1,
+          age: 0,
+          links: neighbors,
+          timestamp: Date.now()
+        };
+
+        // Update own LSDB
+        fromNode.ospfData.linkStateDatabase[fromNode.id] = lsa;
+
+        // Flood to all neighbors
+        const neighborIds = neighbors.map(n => n.to);
+        if (neighborIds.length > 0) {
+          newLogs.push(`Router ${fromNode.id} floods LSA to neighbors: ${neighborIds.join(', ')}.`);
+          const newPackets: Packet[] = neighborIds.map(neighborId => {
+            const toNode = currentNodes.find(n => n.id === neighborId)!;
+            return {
+              id: `lsa-${Date.now()}-${Math.random()}`,
+              from: fromNode.id,
+              to: neighborId,
+              type: 'ospf-lsa',
+              data: lsa,
+              progress: 0,
+              path: [{ x: fromNode.x, y: fromNode.y }, { x: toNode.x, y: toNode.y }]
+            };
+          });
+          setPackets(p => [...p, ...newPackets]);
+        }
+      }
+    }
+
+    // Add all logs from this step
+    if (newLogs.length > 0) {
+      setLog(prevLog => [...newLogs.map(l => `[${new Date().toLocaleTimeString()}] ${l}`).reverse(), ...prevLog.slice(0, MAX_LOG_ENTRIES - newLogs.length)]);
+    }
+
+    // 3. Convergence check
+    if (somethingChangedInNetwork) {
+      convergenceCounter.current = 0;
+    } else {
+      convergenceCounter.current++;
+    }
+
+    const numNodes = nodesRef.current.length;
+    if (numNodes > 0 && convergenceCounter.current >= numNodes * 2) {
+      addLog("OSPF network has converged. Simulation paused.");
+      setIsRunning(false);
+    }
+
+    simulationStep.current++;
+  }, [addLog]);
+
+  // Dijkstra's algorithm for OSPF route calculation
+  const calculateOspfRoutes = useCallback((node: Node, allNodes: Node[], allEdges: Edge[]): OspfRoutingTable => {
+    const distances: { [nodeId: string]: number } = {};
+    const previous: { [nodeId: string]: string | undefined } = {};
+    const unvisited = new Set<string>();
+
+    // Initialize distances
+    allNodes.forEach(n => {
+      distances[n.id] = n.id === node.id ? 0 : Infinity;
+      unvisited.add(n.id);
+    });
+
+    while (unvisited.size > 0) {
+      // Find unvisited node with minimum distance
+      let current = Array.from(unvisited).reduce((min, nodeId) => 
+        distances[nodeId] < distances[min] ? nodeId : min
+      );
+
+      if (distances[current] === Infinity) break;
+      unvisited.delete(current);
+
+      // Check neighbors
+      const currentEdges = allEdges.filter(e => 
+        e.active && (e.from === current || e.to === current)
+      );
+
+      for (const edge of currentEdges) {
+        const neighbor = edge.from === current ? edge.to : edge.from;
+        if (!unvisited.has(neighbor)) continue;
+
+        const alt = distances[current] + edge.cost;
+        if (alt < distances[neighbor]) {
+          distances[neighbor] = alt;
+          previous[neighbor] = current;
+        }
+      }
+    }
+
+    // Build routing table
+    const routingTable: OspfRoutingTable = {};
+    
+    // Add route to self
+    routingTable[node.id] = {
+      destination: node.id,
+      nextHop: node.id,
+      cost: 0,
+      interface: node.id
+    };
+
+    // Add routes to other nodes
+    for (const targetId of Object.keys(distances)) {
+      if (targetId === node.id || distances[targetId] === Infinity) continue;
+
+      // Find next hop by tracing back
+      let nextHop = targetId;
+      while (previous[nextHop] && previous[nextHop] !== node.id) {
+        nextHop = previous[nextHop]!;
+      }
+
+      routingTable[targetId] = {
+        destination: targetId,
+        nextHop: nextHop,
+        cost: distances[targetId],
+        interface: nextHop
+      };
+    }
+
+    return routingTable;
+  }, []);
+
 
   // Simulation Main Loop
   useEffect(() => {
@@ -209,14 +413,13 @@ export default function Home() {
     const interval = setInterval(() => {
       if(algorithm === 'rip') {
         runRipStep();
-      } else {
-        toast({ title: "Coming Soon!", description: "OSPF simulation is not yet implemented."});
-        setIsRunning(false);
+      } else if(algorithm === 'ospf') {
+        runOspfStep();
       }
     }, 1000 / speed);
 
     return () => clearInterval(interval);
-  }, [isRunning, speed, algorithm, runRipStep, toast]);
+  }, [isRunning, speed, algorithm, runRipStep, runOspfStep]);
   
   // Packet animation
   useEffect(() => {
@@ -236,7 +439,7 @@ export default function Home() {
 
   const handleRunPause = () => {
     if (!isRunning && !isSimulating) {
-        addLog("Simulation started with RIP algorithm.");
+        addLog(`Simulation started with ${algorithm.toUpperCase()} algorithm.`);
         setIsSimulating(true);
     }
     setIsRunning(r => {
@@ -262,7 +465,23 @@ export default function Home() {
   const handleNodeAdd = (x: number, y: number) => {
     if (isSimulating) return;
     const newNodeId = getNextNodeId();
-    const newNode: Node = { id: newNodeId, x, y, routingTable: { [newNodeId]: { destination: newNodeId, nextHop: newNodeId, cost: 0 } } };
+    const newNode: Node = { 
+      id: newNodeId, 
+      x, 
+      y, 
+      routingTable: { [newNodeId]: { destination: newNodeId, nextHop: newNodeId, cost: 0 } }
+    };
+    
+    if (algorithm === 'ospf') {
+      newNode.ospfData = {
+        routerId: newNodeId,
+        area: "0.0.0.0",
+        linkStateDatabase: {},
+        neighbors: [],
+        shortestPathTree: []
+      };
+    }
+    
     setNodes(prev => [...prev, newNode]);
   };
 
@@ -296,25 +515,31 @@ export default function Home() {
          addLog(`Link ${toggledEdge.from}-${toggledEdge.to} was ${newEdge.active ? 'activated' : 'deactivated'}.`);
 
          if (!newEdge.active) {
-            setNodes(currentNodes => {
-                const updatedNodes = JSON.parse(JSON.stringify(currentNodes));
-                let invalidatedRoute = false;
-                updatedNodes.forEach((node: Node) => {
-                    Object.keys(node.routingTable).forEach(dest => {
-                        const route = node.routingTable[dest];
-                        if (route.nextHop === toggledEdge.from || route.nextHop === toggledEdge.to || dest === toggledEdge.from || dest === toggledEdge.to) {
-                           if ( (route.nextHop === toggledEdge.to && node.id === toggledEdge.from) || (route.nextHop === toggledEdge.from && node.id === toggledEdge.to) ){
-                                node.routingTable[dest].cost = 16;
-                                invalidatedRoute = true;
-                           }
-                        }
-                    });
-                });
-                if (invalidatedRoute) {
-                  addLog(`Routes via ${toggledEdge.from}-${toggledEdge.to} invalidated.`);
-                }
-                return updatedNodes;
-            });
+            if (algorithm === 'rip') {
+              // RIP-specific route invalidation
+              setNodes(currentNodes => {
+                  const updatedNodes = JSON.parse(JSON.stringify(currentNodes));
+                  let invalidatedRoute = false;
+                  updatedNodes.forEach((node: Node) => {
+                      Object.keys(node.routingTable).forEach(dest => {
+                          const route = node.routingTable[dest];
+                          if (route.nextHop === toggledEdge.from || route.nextHop === toggledEdge.to || dest === toggledEdge.from || dest === toggledEdge.to) {
+                             if ( (route.nextHop === toggledEdge.to && node.id === toggledEdge.from) || (route.nextHop === toggledEdge.from && node.id === toggledEdge.to) ){
+                                  node.routingTable[dest].cost = 16;
+                                  invalidatedRoute = true;
+                             }
+                          }
+                      });
+                  });
+                  if (invalidatedRoute) {
+                    addLog(`Routes via ${toggledEdge.from}-${toggledEdge.to} invalidated.`);
+                  }
+                  return updatedNodes;
+              });
+            } else if (algorithm === 'ospf') {
+              // OSPF will handle this through LSA updates automatically
+              addLog(`OSPF will recalculate routes due to link state change.`);
+            }
          }
          return newEdge;
        }
@@ -342,7 +567,7 @@ export default function Home() {
             onReset={resetSimulation}
             isSimulating={isSimulating}
           />
-          <RoutingTableDisplay nodes={nodes} isSimulating={isSimulating} />
+          <RoutingTableDisplay nodes={nodes} isSimulating={isSimulating} algorithm={algorithm} />
         </aside>
         <div className="grid md:grid-rows-[1fr_250px] lg:grid-rows-[1fr_300px] overflow-hidden gap-4 p-4">
             <NetworkCanvas

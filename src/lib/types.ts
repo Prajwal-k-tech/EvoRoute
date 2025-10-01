@@ -5,7 +5,8 @@ export interface Node {
   id: string;
   x: number;
   y: number;
-  routingTable: RipRoutingTable;
+  routingTable: RipRoutingTable | OspfRoutingTable;
+  ospfData?: OspfNodeData;
 }
 
 export interface Edge {
@@ -35,5 +36,44 @@ export type RipRoute = {
 export type RipRoutingTable = {
     [destination: string]: RipRoute;
 };
+
+// OSPF Types
+export interface OspfRoute {
+  destination: string;
+  nextHop: string;
+  cost: number;
+  interface?: string;
+}
+
+export type OspfRoutingTable = {
+  [destination: string]: OspfRoute;
+};
+
+export interface LinkStateAdvertisement {
+  routerId: string;
+  sequenceNumber: number;
+  age: number;
+  links: {
+    to: string;
+    cost: number;
+    active: boolean;
+  }[];
+  timestamp: number;
+}
+
+export interface OspfNodeData {
+  routerId: string;
+  area: string;
+  linkStateDatabase: { [routerId: string]: LinkStateAdvertisement };
+  neighbors: string[];
+  shortestPathTree?: ShortestPathNode[];
+}
+
+export interface ShortestPathNode {
+  id: string;
+  cost: number;
+  parent?: string;
+  visited: boolean;
+}
 
     

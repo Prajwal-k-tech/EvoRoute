@@ -25,13 +25,14 @@ const explanations = {
   },
   ospf: {
     title: "Open Shortest Path First (OSPF)",
-    description: "A link-state routing protocol. (Coming Soon)",
+    description: "A link-state routing protocol using Dijkstra's algorithm.",
     details: [
-      "OSPF builds a complete map (topology) of the network in its link-state database.",
+      "OSPF builds a complete map (topology) of the network in its link-state database (LSDB).",
       "When a link state changes, the router floods a Link State Advertisement (LSA) to all other routers in the same area.",
-      "It uses Dijkstra's algorithm to calculate the shortest path to all destinations.",
-      "OSPF converges much faster than RIP and is less prone to routing loops.",
-      "It is more complex and resource-intensive than RIP, but is highly scalable for large networks.",
+      "Each router uses Dijkstra's algorithm to calculate the shortest path tree and build its routing table.",
+      "OSPF converges much faster than RIP and is less prone to routing loops due to its complete network view.",
+      "Uses cost as the metric (typically based on bandwidth), allowing for more sophisticated routing decisions.",
+      "Supports hierarchical routing with areas, making it highly scalable for large networks.",
     ],
   },
 };
@@ -53,12 +54,14 @@ export function ExplanationPanel({ algorithm, log }: ExplanationPanelProps) {
           <CardTitle>{content.title}</CardTitle>
           <CardDescription>{content.description}</CardDescription>
         </CardHeader>
-        <CardContent className="flex-1">
-          <ul className="space-y-2 text-sm text-muted-foreground list-disc pl-5">
-            {content.details.map((item, i) => (
-              <li key={i}>{item}</li>
-            ))}
-          </ul>
+        <CardContent className="flex-1 p-0 overflow-hidden">
+          <ScrollArea className="h-full px-6 pb-6">
+            <ul className="space-y-2 text-sm text-muted-foreground list-disc pl-5">
+              {content.details.map((item, i) => (
+                <li key={i}>{item}</li>
+              ))}
+            </ul>
+          </ScrollArea>
         </CardContent>
       </Card>
       <Card className="flex-1 flex flex-col min-h-0 md:w-1/2">
