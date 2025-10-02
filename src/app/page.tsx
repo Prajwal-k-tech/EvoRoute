@@ -429,12 +429,13 @@ export default function Home() {
         setPackets(currentPackets => 
             currentPackets
                 .map(p => ({ ...p, progress: p.progress + 0.01 * speed }))
+                .filter(p => p.progress < 1.1) // Allow to slightly overshoot to be processed, then remove
         );
         animationFrameId = requestAnimationFrame(animate);
     };
     animationFrameId = requestAnimationFrame(animate);
     return () => cancelAnimationFrame(animationFrameId);
-  }, [packets, speed, isRunning]);
+  }, [packets.length, speed, isRunning]);
 
 
   const handleRunPause = () => {
