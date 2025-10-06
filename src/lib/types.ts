@@ -7,6 +7,10 @@ export interface Node {
   y: number;
   routingTable: RipRoutingTable | OspfRoutingTable;
   ospfData?: OspfNodeData;
+  // Visualization states
+  isUpdating?: boolean; // Flash yellow when table updates
+  isVisited?: boolean; // For Dijkstra visualization
+  isProcessing?: boolean; // Currently being processed in Dijkstra
 }
 
 export interface Edge {
@@ -14,6 +18,7 @@ export interface Edge {
   from: string;
   to: string;
   cost: number;
+  bandwidth: number; // in Mbps (for OSPF cost calculation)
   active: boolean;
 }
 
@@ -31,6 +36,8 @@ export type RipRoute = {
   destination: string;
   nextHop: string;
   cost: number;
+  // Visualization flag for counting to infinity
+  isInfinite?: boolean; // cost >= 16
 };
 
 export type RipRoutingTable = {

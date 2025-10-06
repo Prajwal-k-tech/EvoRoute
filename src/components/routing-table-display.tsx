@@ -68,16 +68,23 @@ export function RoutingTableDisplay({ nodes, isSimulating, algorithm }: RoutingT
                           </TableRow>
                         </TableHeader>
                         <TableBody>
-                          {tableEntries.sort((a, b) => a.destination.localeCompare(b.destination)).map((route) => (
-                            <TableRow key={`${node.id}-${route.destination}`}>
+                          {tableEntries.sort((a, b) => a.destination.localeCompare(b.destination)).map((route) => {
+                            const isInfinite = isRipRoute(route) && route.cost >= 16;
+                            return (
+                            <TableRow 
+                              key={`${node.id}-${route.destination}`}
+                              className={isInfinite ? "bg-destructive/10" : ""}
+                            >
                               <TableCell className="font-code">{route.destination}</TableCell>
                               <TableCell className="font-code">{route.nextHop}</TableCell>
-                              <TableCell className="font-code">{route.cost}</TableCell>
+                              <TableCell className={`font-code ${isInfinite ? 'text-destructive font-bold' : ''}`}>
+                                {route.cost}{isInfinite ? ' (∞)' : ''}
+                              </TableCell>
                               {algorithm === 'ospf' && isOspfRoute(route) && (
                                 <TableCell className="font-code">{route.interface || '-'}</TableCell>
                               )}
                             </TableRow>
-                          ))}
+                          );})}
                         </TableBody>
                       </Table>
                     ) : (

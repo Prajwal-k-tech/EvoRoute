@@ -1,12 +1,29 @@
 
+/**
+ * EvoRoute - Interactive Network Routing Protocol Simulator
+ * 
+ * Implements RIP (RFC 2453) and OSPF (RFC 2328) routing protocols with
+ * explicit data structures for educational purposes.
+ * 
+ * Key Design Decisions:
+ * - RIP: Hop count metric (cost=1 per link), infinity=16
+ * - OSPF: Bandwidth-based costs using 10 Gbps reference bandwidth
+ *         Formula: cost = 10000 / bandwidth_mbps
+ *         (RFC 2328 allows configurable reference bandwidth)
+ * - Data Structures: Adjacency List Graph, MinHeap Priority Queue, Hash Tables
+ * - Visualization: Real-time routing table updates, counting to infinity detection
+ */
+
 "use client";
 
 import { useState, useEffect, useCallback, useRef } from "react";
 import type { Node, Edge, Packet, Algorithm, RipRoutingTable, OspfRoutingTable, LinkStateAdvertisement, OspfNodeData, ShortestPathNode } from "@/lib/types";
+import { MinHeap, NetworkGraph } from "@/lib/data-structures";
 import { SimulationControls } from "@/components/simulation-controls";
 import { NetworkCanvas } from "@/components/network-canvas";
 import { ExplanationPanel } from "@/components/explanation-panel";
 import { RoutingTableDisplay } from "@/components/routing-table-display";
+import { BandwidthDialog } from "@/components/bandwidth-dialog";
 import { Logo } from "@/components/icons";
 import { useToast } from "@/hooks/use-toast";
 
@@ -18,10 +35,10 @@ const INITIAL_NODES: Node[] = [
 ];
 
 const INITIAL_EDGES: Edge[] = [
-  { id: 'A-B', from: 'A', to: 'B', cost: 1, active: true },
-  { id: 'A-C', from: 'A', to: 'C', cost: 1, active: true },
-  { id: 'B-D', from: 'B', to: 'D', cost: 1, active: true },
-  { id: 'C-D', from: 'C', to: 'D', cost: 1, active: true },
+  { id: 'A-B', from: 'A', to: 'B', cost: 1, bandwidth: 100, active: true },
+  { id: 'A-C', from: 'A', to: 'C', cost: 1, bandwidth: 100, active: true },
+  { id: 'B-D', from: 'B', to: 'D', cost: 1, bandwidth: 100, active: true },
+  { id: 'C-D', from: 'C', to: 'D', cost: 1, bandwidth: 100, active: true },
 ];
 
 const MAX_LOG_ENTRIES = 100;
@@ -35,6 +52,8 @@ export default function Home() {
   const [isRunning, setIsRunning] = useState(false);
   const [log, setLog] = useState<string[]>([]);
   const [isSimulating, setIsSimulating] = useState(false);
+  const [bandwidthDialogOpen, setBandwidthDialogOpen] = useState(false);
+  const [pendingEdge, setPendingEdge] = useState<{from: string, to: string} | null>(null);
   
   const simulationStep = useRef(0);
   const convergenceCounter = useRef(0);
@@ -73,16 +92,44 @@ export default function Home() {
     setIsRunning(false);
     setIsSimulating(false);
     const initialNodes = JSON.parse(JSON.stringify(INITIAL_NODES));
+    const initialEdges = JSON.parse(JSON.stringify(INITIAL_EDGES));
+    
+    // CRITICAL: Recalculate edge costs based on current algorithm
+    // RIP: Always cost=1 (hop count)
+    // OSPF: cost = 10000 / bandwidth (reference bandwidth / link bandwidth)
+    const edgesWithCorrectCosts = initialEdges.map((e: Edge) => ({
+      ...e,
+      cost: algorithm === 'ospf' ? Math.round(10000 / (e.bandwidth || 100)) : 1
+    }));
     
     if (algorithm === 'rip') {
-      setNodes(initialNodes.map((n: Node) => ({
-        ...n, 
-        routingTable: { [n.id]: { destination: n.id, nextHop: n.id, cost: 0 } }
-      })));
+      // RIP: Initialize with self + direct neighbors
+      const nodesWithRip = initialNodes.map((n: Node) => {
+        const routingTable: any = {};
+        // Route to self
+        routingTable[n.id] = { destination: n.id, nextHop: n.id, cost: 0 };
+        
+        // Routes to direct neighbors (cost = 1 hop)
+        const neighbors = edgesWithCorrectCosts
+          .filter((e: Edge) => e.active && (e.from === n.id || e.to === n.id))
+          .map((e: Edge) => e.from === n.id ? e.to : e.from);
+        
+        neighbors.forEach((neighborId: string) => {
+          routingTable[neighborId] = {
+            destination: neighborId,
+            nextHop: neighborId,
+            cost: 1
+          };
+        });
+        
+        return { ...n, routingTable };
+      });
+      setNodes(nodesWithRip);
     } else if (algorithm === 'ospf') {
+      // OSPF: Initialize with self, will flood LSAs to learn topology
       setNodes(initialNodes.map((n: Node) => ({
         ...n,
-        routingTable: { [n.id]: { destination: n.id, nextHop: n.id, cost: 0 } },
+        routingTable: { [n.id]: { destination: n.id, nextHop: n.id, cost: 0, interface: n.id } },
         ospfData: {
           routerId: n.id,
           area: "0.0.0.0",
@@ -93,16 +140,30 @@ export default function Home() {
       })));
     }
     
-    setEdges(JSON.parse(JSON.stringify(INITIAL_EDGES)));
+    setEdges(edgesWithCorrectCosts);
     setPackets([]);
     setLog([]);
     simulationStep.current = 0;
     convergenceCounter.current = 0;
-  }, [algorithm]);
+    
+    addLog(`Simulation reset with ${algorithm.toUpperCase()} algorithm.`);
+  }, [algorithm, addLog]);
 
   useEffect(() => {
     resetSimulation();
   }, [resetSimulation]);
+
+  // Update edge costs when algorithm changes (for user-created edges)
+  useEffect(() => {
+    if (edges.length > 0 && !isSimulating) {
+      setEdges(prevEdges => 
+        prevEdges.map(e => ({
+          ...e,
+          cost: algorithm === 'ospf' ? Math.round(10000 / (e.bandwidth || 100)) : 1
+        }))
+      );
+    }
+  }, [algorithm, isSimulating]); // Only run when algorithm changes, not on every edge change
   
    const runRipStep = useCallback(() => {
     let somethingChangedInNetwork = false;
@@ -138,21 +199,43 @@ export default function Home() {
 
                     if (!existingRoute || newCost < existingRoute.cost) {
                         if (newCost < 16) {
-                            receivingNode.routingTable[dest] = { destination: dest, nextHop: senderNodeId, cost: newCost };
+                            receivingNode.routingTable[dest] = { 
+                              destination: dest, 
+                              nextHop: senderNodeId, 
+                              cost: newCost,
+                              isInfinite: false 
+                            };
                             tableUpdated = true;
+                            // Enhanced logging for Bellman-Ford update
+                            if (!existingRoute) {
+                              newLogs.push(`✅ RIP (Bellman-Ford): Router ${receivingNode.id} learned new route to ${dest} via ${senderNodeId} (cost: ${newCost} hops). Distance vector updated.`);
+                            } else {
+                              newLogs.push(`🔄 RIP (Bellman-Ford): Router ${receivingNode.id} found better path to ${dest} via ${senderNodeId} (old: ${existingRoute.cost} hops → new: ${newCost} hops). Accepting lower cost route.`);
+                            }
                         }
                     } else if (existingRoute && existingRoute.nextHop === senderNodeId && existingRoute.cost !== newCost) {
                         const updatedCost = newCost >= 16 ? 16 : newCost;
                         if (existingRoute.cost !== updatedCost) {
-                          receivingNode.routingTable[dest] = { ...existingRoute, cost: updatedCost };
+                          receivingNode.routingTable[dest] = { 
+                            ...existingRoute, 
+                            cost: updatedCost,
+                            isInfinite: updatedCost >= 16 
+                          };
                           tableUpdated = true;
+                          // Enhanced logging for counting to infinity
+                          if (updatedCost >= 16) {
+                            newLogs.push(`⚠️ COUNTING TO INFINITY DETECTED: Router ${receivingNode.id} route to ${dest} reached infinity (${updatedCost} ≥ 16 hops). This occurs when link fails and routers continuously increment hop count. Route marked unreachable.`);
+                          } else if (updatedCost > existingRoute.cost) {
+                            newLogs.push(`⚠️ RIP UPDATE: Router ${receivingNode.id} route to ${dest} cost increased: ${existingRoute.cost} → ${updatedCost} hops. Next hop ${senderNodeId} reported higher cost (possible link degradation or topology change).`);
+                          }
                         }
                     }
                 }
             }
             
             if (tableUpdated) {
-                newLogs.push(`Router ${receivingNode.id}'s table updated by ${senderNodeId}.`);
+                newLogs.push(`📊 RIP DISTANCE VECTOR EXCHANGE: Router ${receivingNode.id} processed routing table from neighbor ${senderNodeId}. Distance vector algorithm completed update cycle.`);
+                receivingNode.isUpdating = true; // Visual indicator
                 anyTableUpdated = true;
             }
         }
@@ -243,7 +326,8 @@ export default function Home() {
           // Install LSA if it's new or newer
           if (!existingLSA || lsa.sequenceNumber > existingLSA.sequenceNumber) {
             receivingNode.ospfData.linkStateDatabase[lsa.routerId] = lsa;
-            newLogs.push(`Router ${receivingNode.id} received LSA from ${lsa.routerId}.`);
+            const linkCount = lsa.links.length;
+            newLogs.push(`📡 OSPF LSA FLOODING: Router ${receivingNode.id} received Link State Advertisement from ${lsa.routerId} (seq: ${lsa.sequenceNumber}, ${linkCount} links). LSDB updated with topology information.`);
             anyLSDBUpdated = true;
           }
         }
@@ -253,8 +337,16 @@ export default function Home() {
           // Recalculate routing tables using Dijkstra
           updatedNodes.forEach((node: Node) => {
             if (node.ospfData) {
+              const oldTable = JSON.stringify(node.routingTable);
               const newRoutingTable = calculateOspfRoutes(node, updatedNodes, edgesRef.current);
               node.routingTable = newRoutingTable;
+              
+              // Check if table actually changed
+              if (oldTable !== JSON.stringify(newRoutingTable)) {
+                node.isUpdating = true;
+                const routeCount = Object.keys(newRoutingTable).length;
+                newLogs.push(`🧮 OSPF DIJKSTRA SPF: Router ${node.id} detected LSDB change. Running Dijkstra's Shortest Path First algorithm on link-state graph. Computed ${routeCount} routes based on bandwidth costs (cost = 10,000 / bandwidth_mbps).`);
+              }
             }
           });
         }
@@ -296,7 +388,8 @@ export default function Home() {
         // Flood to all neighbors
         const neighborIds = neighbors.map(n => n.to);
         if (neighborIds.length > 0) {
-          newLogs.push(`Router ${fromNode.id} floods LSA to neighbors: ${neighborIds.join(', ')}.`);
+          const totalCost = neighbors.reduce((sum, n) => sum + n.cost, 0);
+          newLogs.push(`📤 OSPF LSA ORIGINATION: Router ${fromNode.id} originates Link State Advertisement (seq: ${lsa.sequenceNumber}) and floods to neighbors: ${neighborIds.join(', ')}. Advertising ${neighbors.length} links with total cost ${totalCost}. This forms the distributed link-state database.`);
           const newPackets: Packet[] = neighborIds.map(neighborId => {
             const toNode = currentNodes.find(n => n.id === neighborId)!;
             return {
@@ -335,45 +428,52 @@ export default function Home() {
     simulationStep.current++;
   }, [addLog]);
 
-  // Dijkstra's algorithm for OSPF route calculation
+  // Dijkstra's algorithm for OSPF route calculation using MinHeap Priority Queue
+  // Time Complexity: O((V + E) log V) - Much better than O(V²) linear search
   const calculateOspfRoutes = useCallback((node: Node, allNodes: Node[], allEdges: Edge[]): OspfRoutingTable => {
     const distances: { [nodeId: string]: number } = {};
     const previous: { [nodeId: string]: string | undefined } = {};
-    const unvisited = new Set<string>();
+    const visited = new Set<string>();
+    
+    // Initialize MinHeap Priority Queue (KEY DATA STRUCTURE)
+    const priorityQueue = new MinHeap();
 
-    // Initialize distances
+    // Initialize distances and add all nodes to priority queue
     allNodes.forEach(n => {
-      distances[n.id] = n.id === node.id ? 0 : Infinity;
-      unvisited.add(n.id);
+      const dist = n.id === node.id ? 0 : Infinity;
+      distances[n.id] = dist;
+      priorityQueue.insert(n.id, dist);
     });
 
-    while (unvisited.size > 0) {
-      // Find unvisited node with minimum distance
-      let current = Array.from(unvisited).reduce((min, nodeId) => 
-        distances[nodeId] < distances[min] ? nodeId : min
-      );
+    // Dijkstra's algorithm using Priority Queue
+    while (!priorityQueue.isEmpty()) {
+      // Extract node with minimum distance - O(log V)
+      const current = priorityQueue.extractMin();
+      if (!current || distances[current.id] === Infinity) break;
 
-      if (distances[current] === Infinity) break;
-      unvisited.delete(current);
+      visited.add(current.id);
 
-      // Check neighbors
+      // Check all neighbors
       const currentEdges = allEdges.filter(e => 
-        e.active && (e.from === current || e.to === current)
+        e.active && (e.from === current.id || e.to === current.id)
       );
 
       for (const edge of currentEdges) {
-        const neighbor = edge.from === current ? edge.to : edge.from;
-        if (!unvisited.has(neighbor)) continue;
+        const neighbor = edge.from === current.id ? edge.to : edge.from;
+        if (visited.has(neighbor)) continue;
 
-        const alt = distances[current] + edge.cost;
+        // Relaxation step
+        const alt = distances[current.id] + edge.cost;
         if (alt < distances[neighbor]) {
           distances[neighbor] = alt;
-          previous[neighbor] = current;
+          previous[neighbor] = current.id;
+          // Decrease key in priority queue - O(log V)
+          priorityQueue.decreaseKey(neighbor, alt);
         }
       }
     }
 
-    // Build routing table
+    // Build routing table from shortest path tree
     const routingTable: OspfRoutingTable = {};
     
     // Add route to self
@@ -388,7 +488,7 @@ export default function Home() {
     for (const targetId of Object.keys(distances)) {
       if (targetId === node.id || distances[targetId] === Infinity) continue;
 
-      // Find next hop by tracing back
+      // Find next hop by tracing back through shortest path tree
       let nextHop = targetId;
       while (previous[nextHop] && previous[nextHop] !== node.id) {
         nextHop = previous[nextHop]!;
@@ -436,6 +536,20 @@ export default function Home() {
     animationFrameId = requestAnimationFrame(animate);
     return () => cancelAnimationFrame(animationFrameId);
   }, [packets.length, speed, isRunning]);
+
+  // Clear isUpdating flags after visual feedback duration
+  useEffect(() => {
+    const nodesWithUpdates = nodes.filter(n => n.isUpdating);
+    if (nodesWithUpdates.length === 0) return;
+
+    const timeout = setTimeout(() => {
+      setNodes(prevNodes => 
+        prevNodes.map(n => n.isUpdating ? { ...n, isUpdating: false } : n)
+      );
+    }, 800);
+
+    return () => clearTimeout(timeout);
+  }, [nodes]);
 
 
   const handleRunPause = () => {
@@ -486,7 +600,7 @@ export default function Home() {
     setNodes(prev => [...prev, newNode]);
   };
 
-  const handleEdgeAdd = (from: string, to: string) => {
+  const handleEdgeAddRequest = (from: string, to: string) => {
     if (isSimulating) return;
     if (edges.some(e => (e.from === from && e.to === to) || (e.from === to && e.to === from))) {
       toast({
@@ -496,8 +610,63 @@ export default function Home() {
       });
       return;
     }
-    const newEdge: Edge = { id: `${from}-${to}`, from, to, cost: 1, active: true };
+    setPendingEdge({ from, to });
+    setBandwidthDialogOpen(true);
+  };
+
+  const handleEdgeAdd = (from: string, to: string, bandwidth: number) => {
+    if (isSimulating) return;
+    
+    // Calculate cost based on algorithm
+    // RIP: Always 1 (hop count metric - RFC 2453)
+    // OSPF: Reference bandwidth / link bandwidth (RFC 2328)
+    //   We use 10,000 Mbps (10 Gbps) reference instead of standard 100 Mbps
+    //   This is configurable and better demonstrates cost differences in modern networks
+    //   Formula: cost = 10000 / bandwidth_mbps
+    //   Example: 100 Mbps → cost=100, 1000 Mbps → cost=10
+    const cost = algorithm === 'ospf' ? Math.round(10000 / bandwidth) : 1;
+    
+    const newEdge: Edge = { 
+      id: `${from}-${to}`, 
+      from, 
+      to, 
+      cost, 
+      bandwidth,
+      active: true 
+    };
     setEdges(prev => [...prev, newEdge]);
+    addLog(`Link created: ${from}-${to} (Bandwidth: ${bandwidth} Mbps, Cost: ${cost})`);
+    
+    // For RIP: Immediately update routing tables with direct neighbor info
+    if (algorithm === 'rip') {
+      setNodes(prev => prev.map(node => {
+        if (node.id === from) {
+          return {
+            ...node,
+            routingTable: {
+              ...node.routingTable,
+              [to]: { destination: to, nextHop: to, cost: 1 }
+            }
+          };
+        } else if (node.id === to) {
+          return {
+            ...node,
+            routingTable: {
+              ...node.routingTable,
+              [from]: { destination: from, nextHop: from, cost: 1 }
+            }
+          };
+        }
+        return node;
+      }));
+    }
+  };
+
+  const handleBandwidthConfirm = (bandwidth: number) => {
+    if (pendingEdge) {
+      handleEdgeAdd(pendingEdge.from, pendingEdge.to, bandwidth);
+      setPendingEdge(null);
+    }
   };
 
   const handleNodeDrag = (id: string, x: number, y: number) => {
@@ -577,15 +746,27 @@ export default function Home() {
               packets={packets}
               onNodeAdd={handleNodeAdd}
               onEdgeAdd={handleEdgeAdd}
+              onEdgeAddRequest={handleEdgeAddRequest}
               onNodeDrag={handleNodeDrag}
               onEdgeToggle={handleEdgeToggle}
               isSimulating={isSimulating}
+              algorithm={algorithm}
             />
           <ExplanationPanel algorithm={algorithm} log={log} />
         </div>
       </main>
+      
+      <BandwidthDialog
+        isOpen={bandwidthDialogOpen}
+        onClose={() => {
+          setBandwidthDialogOpen(false);
+          setPendingEdge(null);
+        }}
+        onConfirm={handleBandwidthConfirm}
+        fromNode={pendingEdge?.from || ''}
+        toNode={pendingEdge?.to || ''}
+        algorithm={algorithm}
+      />
     </div>
   );
 }
-
-    

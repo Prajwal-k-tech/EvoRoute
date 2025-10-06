@@ -20,10 +20,12 @@ interface NetworkCanvasProps {
   edges: Edge[];
   packets: Packet[];
   onNodeAdd: (x: number, y: number) => void;
-  onEdgeAdd: (from: string, to: string) => void;
+  onEdgeAdd: (from: string, to: string, bandwidth: number) => void;
   onNodeDrag: (id: string, x: number, y: number) => void;
   onEdgeToggle: (id: string) => void;
+  onEdgeAddRequest: (from: string, to: string) => void;
   isSimulating: boolean;
+  algorithm: 'rip' | 'ospf';
 }
 
 export function NetworkCanvas({
@@ -34,7 +36,9 @@ export function NetworkCanvas({
   onEdgeAdd,
   onNodeDrag,
   onEdgeToggle,
+  onEdgeAddRequest,
   isSimulating,
+  algorithm,
 }: NetworkCanvasProps) {
   const [mode, setMode] = useState<InteractionMode>("none");
   const [edgeStartNode, setEdgeStartNode] = useState<string | null>(null);
@@ -57,7 +61,7 @@ export function NetworkCanvas({
         setEdgeStartNode(nodeId);
       } else {
         if (edgeStartNode !== nodeId) {
-          onEdgeAdd(edgeStartNode, nodeId);
+          onEdgeAddRequest(edgeStartNode, nodeId);
         }
         setEdgeStartNode(null);
         setMode("none");
@@ -141,6 +145,17 @@ export function NetworkCanvas({
             const toNode = nodes.find((n) => n.id === edge.to);
             if (!fromNode || !toNode) return null;
 
+            // Calculate midpoint for cost label
+            const midX = (fromNode.x + toNode.x) / 2;
+            const midY = (fromNode.y + toNode.y) / 2;
+            
+            // Calculate offset perpendicular to edge
+            const dx = toNode.x - fromNode.x;
+            const dy = toNode.y - fromNode.y;
+            const length = Math.sqrt(dx * dx + dy * dy);
+            const offsetX = (-dy / length) * 15; // Perpendicular offset
+            const offsetY = (dx / length) * 15;
+
             return (
               <g key={edge.id}>
                 <line
@@ -162,30 +177,71 @@ export function NetworkCanvas({
                   className="stroke-[15] stroke-transparent pointer-events-auto cursor-pointer"
                   onClick={() => !isSimulating && onEdgeToggle(edge.id)}
                 />
+                {/* Edge cost/bandwidth label */}
+                <g transform={`translate(${midX + offsetX}, ${midY + offsetY})`}>
+                  <rect
+                    x="-20"
+                    y="-10"
+                    width="40"
+                    height="20"
+                    rx="4"
+                    className={cn(
+                      "fill-card/95 transition-all",
+                      edge.active ? "stroke-primary" : "stroke-destructive/50"
+                    )}
+                    strokeWidth="1"
+                  />
+                  <text
+                    x="0"
+                    y="4"
+                    textAnchor="middle"
+                    className={cn(
+                      "text-[10px] font-mono font-bold pointer-events-none select-none",
+                      edge.active ? "fill-primary" : "fill-destructive"
+                    )}
+                  >
+                    {algorithm === 'ospf' ? `${edge.cost}` : '1'}
+                  </text>
+                </g>
               </g>
             );
           })}
         </svg>
 
-        {nodes.map((node) => (
+        {nodes.map((node) => {
+          // Check if node has counting to infinity problem
+          const hasInfiniteRoute = Object.values(node.routingTable).some(
+            (route: any) => route.cost >= 16
+          );
+          
+          return (
           <div
             key={node.id}
             className={cn(
               "absolute w-16 h-16 transform -translate-x-1/2 -translate-y-1/2 select-none",
               "flex flex-col items-center justify-center rounded-full border-2",
-              "bg-card transition-colors duration-300",
+              "bg-card transition-all duration-300",
               isSimulating ? "cursor-not-allowed" : (mode === 'none' ? 'cursor-grab' : 'cursor-pointer'),
               edgeStartNode === node.id ? "border-accent ring-4 ring-accent/50" : "border-primary",
-              draggingNode?.id === node.id ? "shadow-2xl scale-105 z-10 cursor-grabbing" : ""
+              draggingNode?.id === node.id ? "shadow-2xl scale-105 z-10 cursor-grabbing" : "",
+              // Visual indicators for algorithm states
+              node.isUpdating && "animate-pulse border-accent shadow-lg shadow-accent/50",
+              hasInfiniteRoute && algorithm === 'rip' && "border-destructive ring-2 ring-destructive/30",
+              node.isProcessing && algorithm === 'ospf' && "border-muted ring-2 ring-muted/50",
+              node.isVisited && algorithm === 'ospf' && "border-primary ring-2 ring-primary/30"
             )}
             style={{ left: node.x, top: node.y }}
             onClick={() => handleNodeClick(node.id)}
             onMouseDown={(e) => handleNodeMouseDown(e, node.id)}
           >
-            <RouterIcon className="w-6 h-6 text-primary" />
+            <RouterIcon className={cn(
+              "w-6 h-6 transition-colors",
+              hasInfiniteRoute && algorithm === 'rip' ? "text-destructive" : "text-primary"
+            )} />
             <span className="text-xs font-bold font-code mt-1">{node.id}</span>
           </div>
-        ))}
+        );
+        })}
 
         {packets.map(packet => {
           if (packet.path.length < 2) return null;

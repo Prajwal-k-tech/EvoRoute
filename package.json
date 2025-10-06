@@ -1,7 +1,25 @@
 {
-  "name": "nextn",
-  "version": "0.1.0",
-  "private": true,
+  "name": "evoroute",
+  "version": "1.0.0",
+  "description": "Interactive Network Routing Protocol Simulator - Educational tool demonstrating RIP and OSPF with explicit data structures",
+  "author": "Prajwal K",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Prajwal-k-tech/EvoRoute.git"
+  },
+  "homepage": "https://prajwal-k-tech.github.io/EvoRoute",
+  "keywords": [
+    "routing",
+    "networking",
+    "data-structures",
+    "graph",
+    "dijkstra",
+    "bellman-ford",
+    "education",
+    "visualization"
+  ],
+  "private": false,
   "scripts": {
     "dev": "next dev --turbopack -p 9002",
     "genkit:dev": "genkit start -- tsx src/ai/dev.ts",
@@ -44,7 +62,7 @@
     "firebase": "^11.9.1",
     "genkit": "^1.14.1",
     "lucide-react": "^0.475.0",
-    "next": "15.3.3",
+    "next": "^15.5.4",
     "patch-package": "^8.0.0",
     "react": "^18.3.1",
     "react-day-picker": "^8.10.1",
