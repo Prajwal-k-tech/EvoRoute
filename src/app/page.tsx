@@ -81,13 +81,13 @@ export default function Home() {
     logRef.current = log;
   }, [log]);
 
-  // Initialize the network on mount
+  // Initialize the network on mount - call resetSimulation to properly set up routing tables
   useEffect(() => {
-    const initialNodes = JSON.parse(JSON.stringify(INITIAL_NODES));
-    const initialEdges = JSON.parse(JSON.stringify(INITIAL_EDGES));
-    setNodes(initialNodes);
-    setEdges(initialEdges);
-    addLog('Network initialized. Click Run to start simulation.');
+    // Use setTimeout to ensure resetSimulation is defined
+    const timer = setTimeout(() => {
+      resetSimulation();
+    }, 0);
+    return () => clearTimeout(timer);
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const addLog = useCallback((newLog: string) => {
