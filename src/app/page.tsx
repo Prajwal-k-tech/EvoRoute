@@ -17,7 +17,7 @@
 "use client";
 
 import { useState, useEffect, useCallback, useRef } from "react";
-import type { Node, Edge, Packet, Algorithm, RipRoutingTable, OspfRoutingTable, LinkStateAdvertisement, OspfNodeData, ShortestPathNode } from "@/lib/types";
+import type { Node, Edge, Packet, Algorithm, RipRoute, RipRoutingTable, OspfRoutingTable, LinkStateAdvertisement, OspfNodeData, ShortestPathNode } from "@/lib/types";
 import { MinHeap, NetworkGraph } from "@/lib/data-structures";
 import { SimulationControls } from "@/components/simulation-controls";
 import { NetworkCanvas } from "@/components/network-canvas";
@@ -81,6 +81,14 @@ export default function Home() {
     logRef.current = log;
   }, [log]);
 
+  // Initialize the network on mount
+  useEffect(() => {
+    const initialNodes = JSON.parse(JSON.stringify(INITIAL_NODES));
+    const initialEdges = JSON.parse(JSON.stringify(INITIAL_EDGES));
+    setNodes(initialNodes);
+    setEdges(initialEdges);
+    addLog('Network initialized. Click Run to start simulation.');
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const addLog = useCallback((newLog: string) => {
     const message = `[${new Date().toLocaleTimeString()}] ${newLog}`;
@@ -89,8 +97,15 @@ export default function Home() {
 
 
   const resetSimulation = useCallback(() => {
+    // First, stop all simulation activities
     setIsRunning(false);
     setIsSimulating(false);
+    
+    // Clear all simulation state immediately
+    setPackets([]);
+    simulationStep.current = 0;
+    convergenceCounter.current = 0;
+    
     const initialNodes = JSON.parse(JSON.stringify(INITIAL_NODES));
     const initialEdges = JSON.parse(JSON.stringify(INITIAL_EDGES));
     
@@ -141,17 +156,10 @@ export default function Home() {
     }
     
     setEdges(edgesWithCorrectCosts);
-    setPackets([]);
     setLog([]);
-    simulationStep.current = 0;
-    convergenceCounter.current = 0;
     
     addLog(`Simulation reset with ${algorithm.toUpperCase()} algorithm.`);
   }, [algorithm, addLog]);
-
-  useEffect(() => {
-    resetSimulation();
-  }, [resetSimulation]);
 
   // Update edge costs when algorithm changes (for user-created edges)
   useEffect(() => {
@@ -163,16 +171,40 @@ export default function Home() {
         }))
       );
     }
-  }, [algorithm, isSimulating]); // Only run when algorithm changes, not on every edge change
+  }, [algorithm, isSimulating]);
   
    const runRipStep = useCallback(() => {
     let somethingChangedInNetwork = false;
     let newLogs: string[] = [];
 
-    // 1. Process finished packets and update tables
+    newLogs.push('');
+    newLogs.push(`╔═══════════════════════════════════════════════════════╗`);
+    newLogs.push(`║  ITERATION ${simulationStep.current} - Bellman-Ford Distance Vector`);
+    newLogs.push(`╚═══════════════════════════════════════════════════════╝`);
+
+    // PHASE 1: Display current routing tables
+    newLogs.push('');
+    newLogs.push('[CURRENT ROUTING TABLES]');
+    nodesRef.current.forEach(node => {
+      newLogs.push(`  Router ${node.id}:`);
+      const routes = Object.values(node.routingTable);
+      routes.forEach((route: RipRoute) => {
+        if (route.destination === node.id) {
+          newLogs.push(`     ${route.destination}: SELF (cost 0)`);
+        } else {
+          const costDisplay = route.cost >= 16 ? 'INF (unreachable)' : route.cost.toString();
+          newLogs.push(`     ${route.destination}: via ${route.nextHop}, cost ${costDisplay}`);
+        }
+      });
+    });
+
+    // PHASE 2: Process finished packets and update tables
     const finishedPackets = packetsRef.current.filter(p => p.progress >= 1 && p.type === 'rip');
 
     if (finishedPackets.length > 0) {
+      newLogs.push('');
+      newLogs.push(`[PROCESSING ${finishedPackets.length} INCOMING UPDATE(S)]`);
+      
       setNodes(currentNodes => {
         const updatedNodes = JSON.parse(JSON.stringify(currentNodes));
         let anyTableUpdated = false;
@@ -187,6 +219,9 @@ export default function Home() {
             
             const senderTable = packet.data as RipRoutingTable;
             let tableUpdated = false;
+            const updates: string[] = [];
+
+            newLogs.push(`  Router ${receivingNode.id} ← from ${senderNodeId} (link cost: ${linkCost}):`);
 
             const allDestinations = new Set([...Object.keys(senderTable), ...Object.keys(receivingNode.routingTable)]);
 
@@ -194,9 +229,11 @@ export default function Home() {
                 const sentRoute = senderTable[dest];
                 const existingRoute = receivingNode.routingTable[dest];
                 
-                if (sentRoute) {
+                if (sentRoute && dest !== receivingNode.id) {
                     const newCost = sentRoute.cost + linkCost;
+                    const advCost = sentRoute.cost >= 16 ? 'INF' : sentRoute.cost;
 
+                    // Case 1: New route or better cost
                     if (!existingRoute || newCost < existingRoute.cost) {
                         if (newCost < 16) {
                             receivingNode.routingTable[dest] = { 
@@ -206,14 +243,16 @@ export default function Home() {
                               isInfinite: false 
                             };
                             tableUpdated = true;
-                            // Enhanced logging for Bellman-Ford update
                             if (!existingRoute) {
-                              newLogs.push(`✅ RIP (Bellman-Ford): Router ${receivingNode.id} learned new route to ${dest} via ${senderNodeId} (cost: ${newCost} hops). Distance vector updated.`);
+                              updates.push(`     [NEW] ${dest} via ${senderNodeId}, cost ${newCost} (${senderNodeId} advertised ${advCost})`);
                             } else {
-                              newLogs.push(`🔄 RIP (Bellman-Ford): Router ${receivingNode.id} found better path to ${dest} via ${senderNodeId} (old: ${existingRoute.cost} hops → new: ${newCost} hops). Accepting lower cost route.`);
+                              const oldC = existingRoute.cost >= 16 ? 'INF' : existingRoute.cost;
+                              updates.push(`     [BETTER] ${dest} now ${newCost} via ${senderNodeId} (was ${oldC} via ${existingRoute.nextHop})`);
                             }
                         }
-                    } else if (existingRoute && existingRoute.nextHop === senderNodeId && existingRoute.cost !== newCost) {
+                    } 
+                    // Case 2: Same next-hop updates (must accept even if worse - RFC 2453)
+                    else if (existingRoute && existingRoute.nextHop === senderNodeId && existingRoute.cost !== newCost) {
                         const updatedCost = newCost >= 16 ? 16 : newCost;
                         if (existingRoute.cost !== updatedCost) {
                           receivingNode.routingTable[dest] = { 
@@ -222,21 +261,25 @@ export default function Home() {
                             isInfinite: updatedCost >= 16 
                           };
                           tableUpdated = true;
-                          // Enhanced logging for counting to infinity
+                          
                           if (updatedCost >= 16) {
-                            newLogs.push(`⚠️ COUNTING TO INFINITY DETECTED: Router ${receivingNode.id} route to ${dest} reached infinity (${updatedCost} ≥ 16 hops). This occurs when link fails and routers continuously increment hop count. Route marked unreachable.`);
+                            updates.push(`     [UNREACHABLE] ${dest} now INF (${senderNodeId} advertised INF)`);
                           } else if (updatedCost > existingRoute.cost) {
-                            newLogs.push(`⚠️ RIP UPDATE: Router ${receivingNode.id} route to ${dest} cost increased: ${existingRoute.cost} → ${updatedCost} hops. Next hop ${senderNodeId} reported higher cost (possible link degradation or topology change).`);
+                            updates.push(`     [COST INCREASE] ${dest} cost ${existingRoute.cost} -> ${updatedCost} (counting to infinity)`);
+                          } else {
+                            updates.push(`     [COST DECREASE] ${dest} cost ${existingRoute.cost} -> ${updatedCost}`);
                           }
                         }
                     }
                 }
             }
             
-            if (tableUpdated) {
-                newLogs.push(`📊 RIP DISTANCE VECTOR EXCHANGE: Router ${receivingNode.id} processed routing table from neighbor ${senderNodeId}. Distance vector algorithm completed update cycle.`);
-                receivingNode.isUpdating = true; // Visual indicator
-                anyTableUpdated = true;
+            if (updates.length > 0) {
+              updates.forEach(u => newLogs.push(u));
+              receivingNode.isUpdating = true;
+              anyTableUpdated = true;
+            } else {
+              newLogs.push(`     [INFO] No changes (all routes already optimal)`);
             }
         }
 
@@ -247,57 +290,84 @@ export default function Home() {
             return currentNodes;
         }
       });
+    } else {
+      newLogs.push('');
+      newLogs.push('[WAITING] No packets arrived yet');
     }
     
     // Clear processed packets
-    setPackets(currentPackets => currentPackets.filter(p => p.progress < 1));
+    setPackets(currentPackets => currentPackets.filter(p => p.progress < 1 || p.type !== 'rip'));
 
-    // 2. Create and send new packets based on the latest tables
+    // PHASE 3: Send routing updates
+    const shouldSendPackets = somethingChangedInNetwork || simulationStep.current < 2;
+    
     const currentNodes = nodesRef.current;
-    if (currentNodes.length > 0) {
-        const updatingNodeIndex = simulationStep.current % currentNodes.length;
-        const fromNode = currentNodes[updatingNodeIndex];
-
-        if (fromNode) {
+    if (currentNodes.length > 0 && shouldSendPackets) {
+        const allNewPackets: Packet[] = [];
+        
+        newLogs.push('');
+        newLogs.push('[BROADCASTING ROUTING TABLES]');
+        
+        currentNodes.forEach(fromNode => {
             const neighbors = edgesRef.current
                 .filter(e => e.active && (e.from === fromNode.id || e.to === fromNode.id))
                 .map(e => (e.from === fromNode.id ? e.to : e.from));
 
             if (neighbors.length > 0) {
-                newLogs.push(`Router ${fromNode.id} sends routing update to neighbors: ${neighbors.join(', ')}.`);
-                const newPackets: Packet[] = neighbors.map(neighborId => {
+                const routes = Object.entries(fromNode.routingTable as RipRoutingTable)
+                  .filter(([dest]) => dest !== fromNode.id)
+                  .map(([dest, route]) => `${dest}:${route.cost >= 16 ? 'INF' : route.cost}`)
+                  .join(', ');
+                newLogs.push(`  Router ${fromNode.id} -> [${neighbors.join(', ')}]: {${routes}}`);
+                
+                neighbors.forEach(neighborId => {
                     const toNode = currentNodes.find(n => n.id === neighborId)!;
-                    return {
+                    allNewPackets.push({
                         id: `pkt-${Date.now()}-${Math.random()}`,
                         from: fromNode.id,
                         to: neighborId,
                         type: 'rip',
-                        data: fromNode.routingTable,
+                        data: JSON.parse(JSON.stringify(fromNode.routingTable)),
                         progress: 0,
                         path: [{ x: fromNode.x, y: fromNode.y }, { x: toNode.x, y: toNode.y }]
-                    };
+                    });
                 });
-                setPackets(p => [...p, ...newPackets]);
             }
+        });
+        
+        if (allNewPackets.length > 0) {
+            setPackets(p => [...p, ...allNewPackets]);
         }
+    } else {
+      newLogs.push('');
+      newLogs.push('[STABLE] No broadcasts needed');
     }
     
-    // Add all logs from this step
+    // Add logs
     if (newLogs.length > 0) {
       setLog(prevLog => [...newLogs.map(l => `[${new Date().toLocaleTimeString()}] ${l}`).reverse(), ...prevLog.slice(0, MAX_LOG_ENTRIES - newLogs.length)]);
     }
 
-    // 3. Convergence check
-    if (somethingChangedInNetwork) {
+    // PHASE 4: Convergence check
+    if (somethingChangedInNetwork || packetsRef.current.length > 0) {
         convergenceCounter.current = 0;
     } else {
         convergenceCounter.current++;
     }
 
     const numNodes = nodesRef.current.length;
-    if (numNodes > 0 && convergenceCounter.current >= numNodes * 2) {
-        addLog("Network has converged. Simulation paused.");
+    const vMinus1 = numNodes - 1;
+    if (numNodes > 0 && convergenceCounter.current >= vMinus1 && packetsRef.current.length === 0) {
+        addLog('');
+        addLog('╔═══════════════════════════════════════════════════════╗');
+        addLog('║  [CONVERGENCE ACHIEVED]                                ║');
+        addLog('╚═══════════════════════════════════════════════════════╝');
+        addLog(`Network stable for ${vMinus1} iterations (Bellman-Ford V-1 theorem)`);
+        addLog('All routing tables are optimal. Simulation complete.');
         setIsRunning(false);
+        setIsSimulating(false);
+    } else if (packetsRef.current.length === 0 && convergenceCounter.current > 0) {
+        addLog(`[STABILITY] ${convergenceCounter.current}/${vMinus1} iterations (need ${vMinus1 - convergenceCounter.current} more)`);
     }
 
     simulationStep.current++;
@@ -308,10 +378,32 @@ export default function Home() {
     let somethingChangedInNetwork = false;
     let newLogs: string[] = [];
 
-    // 1. Process finished LSA packets
-    const finishedPackets = packetsRef.current.filter(p => p.progress >= 1 && p.type === 'ospf-lsa');
+    newLogs.push('');
+    newLogs.push(`╔═══════════════════════════════════════════════════════╗`);
+    newLogs.push(`║  ITERATION ${simulationStep.current} - OSPF Link-State Routing (Dijkstra)`);
+    newLogs.push(`╚═══════════════════════════════════════════════════════╝`);
 
+    // PHASE 1: Show current Link-State Databases
+    newLogs.push('');
+    newLogs.push('[LINK-STATE DATABASES (LSDB)]');
+    nodesRef.current.forEach(node => {
+      if (node.ospfData) {
+        const lsdbSize = Object.keys(node.ospfData.linkStateDatabase).length;
+        newLogs.push(`  Router ${node.id}: ${lsdbSize} LSA(s) in database`);
+        Object.entries(node.ospfData.linkStateDatabase).forEach(([routerId, lsa]) => {
+          const links = lsa.links.filter(l => l.active).map(l => `${l.to}(cost ${l.cost})`).join(', ');
+          newLogs.push(`     LSA from ${routerId} seq=${lsa.sequenceNumber}: neighbors [${links}]`);
+        });
+      }
+    });
+
+    // PHASE 2: Process LSA packets (flooding)
+    const finishedPackets = packetsRef.current.filter(p => p.progress >= 1 && p.type === 'ospf-lsa');
+    
     if (finishedPackets.length > 0) {
+      newLogs.push('');
+      newLogs.push(`[LSA FLOODING - Processing ${finishedPackets.length} LSA(s)]`);
+      
       setNodes(currentNodes => {
         const updatedNodes = JSON.parse(JSON.stringify(currentNodes));
         let anyLSDBUpdated = false;
@@ -326,26 +418,54 @@ export default function Home() {
           // Install LSA if it's new or newer
           if (!existingLSA || lsa.sequenceNumber > existingLSA.sequenceNumber) {
             receivingNode.ospfData.linkStateDatabase[lsa.routerId] = lsa;
-            const linkCount = lsa.links.length;
-            newLogs.push(`📡 OSPF LSA FLOODING: Router ${receivingNode.id} received Link State Advertisement from ${lsa.routerId} (seq: ${lsa.sequenceNumber}, ${linkCount} links). LSDB updated with topology information.`);
+            const links = lsa.links.filter(l => l.active).map(l => `${l.to}:${l.cost}`).join(', ');
+            
+            if (!existingLSA) {
+              newLogs.push(`  Router ${receivingNode.id}: [NEW LSA] from ${lsa.routerId} seq=${lsa.sequenceNumber}, links: [${links}]`);
+            } else {
+              newLogs.push(`  Router ${receivingNode.id}: [UPDATED LSA] from ${lsa.routerId} seq ${existingLSA.sequenceNumber}→${lsa.sequenceNumber}`);
+            }
             anyLSDBUpdated = true;
+          } else if (existingLSA && existingLSA.sequenceNumber === lsa.sequenceNumber) {
+            newLogs.push(`  Router ${receivingNode.id}: [DUPLICATE] LSA from ${lsa.routerId} seq=${lsa.sequenceNumber}, ignored`);
           }
         }
 
+        // PHASE 3: Run Dijkstra's SPF if LSDB changed
         if (anyLSDBUpdated) {
+          newLogs.push('');
+          newLogs.push('[RUNNING DIJKSTRA SPF ALGORITHM]');
           somethingChangedInNetwork = true;
+          
           // Recalculate routing tables using Dijkstra
           updatedNodes.forEach((node: Node) => {
             if (node.ospfData) {
+              newLogs.push(`  Router ${node.id}: Computing shortest path tree...`);
               const oldTable = JSON.stringify(node.routingTable);
               const newRoutingTable = calculateOspfRoutes(node, updatedNodes, edgesRef.current);
-              node.routingTable = newRoutingTable;
               
               // Check if table actually changed
               if (oldTable !== JSON.stringify(newRoutingTable)) {
+                const changes: string[] = [];
+                Object.entries(newRoutingTable).forEach(([dest, route]) => {
+                  const oldRoute = (node.routingTable as OspfRoutingTable)[dest];
+                  if (!oldRoute) {
+                    changes.push(`${dest} via ${route.nextHop} cost=${route.cost}`);
+                  } else if (oldRoute.cost !== route.cost || oldRoute.nextHop !== route.nextHop) {
+                    changes.push(`${dest} cost ${oldRoute.cost}→${route.cost} via ${route.nextHop}`);
+                  }
+                });
+                
+                node.routingTable = newRoutingTable;
                 node.isUpdating = true;
-                const routeCount = Object.keys(newRoutingTable).length;
-                newLogs.push(`🧮 OSPF DIJKSTRA SPF: Router ${node.id} detected LSDB change. Running Dijkstra's Shortest Path First algorithm on link-state graph. Computed ${routeCount} routes based on bandwidth costs (cost = 10,000 / bandwidth_mbps).`);
+                
+                if (changes.length > 0) {
+                  newLogs.push(`    [ROUTES UPDATED] ${changes.join(', ')}`);
+                } else {
+                  newLogs.push(`    [NO CHANGES] Routing table unchanged`);
+                }
+              } else {
+                newLogs.push(`    [NO CHANGES] Same routes computed`);
               }
             }
           });
@@ -353,19 +473,28 @@ export default function Home() {
 
         return anyLSDBUpdated ? updatedNodes : currentNodes;
       });
+    } else {
+      newLogs.push('');
+      newLogs.push('[LSA FLOODING] No LSAs arrived');
     }
 
     // Clear processed packets
-    setPackets(currentPackets => currentPackets.filter(p => p.progress < 1));
+    setPackets(currentPackets => currentPackets.filter(p => p.progress < 1 || p.type !== 'ospf-lsa'));
 
-    // 2. Generate and flood LSAs
+    // PHASE 4: Generate and flood new LSAs
+    const shouldSendPackets = somethingChangedInNetwork || simulationStep.current < 2;
+    
     const currentNodes = nodesRef.current;
-    if (currentNodes.length > 0) {
-      const updatingNodeIndex = simulationStep.current % currentNodes.length;
-      const fromNode = currentNodes[updatingNodeIndex];
-
-      if (fromNode && fromNode.ospfData) {
-        // Create LSA for this node
+    if (currentNodes.length > 0 && shouldSendPackets) {
+      const allNewPackets: Packet[] = [];
+      
+      newLogs.push('');
+      newLogs.push('[ORIGINATING & FLOODING LSAs]');
+      
+      // Update LSDBs first (synchronously)
+      const updatedNodes = currentNodes.map(fromNode => {
+        if (!fromNode.ospfData) return fromNode;
+        
         const neighbors = edgesRef.current
           .filter(e => e.active && (e.from === fromNode.id || e.to === fromNode.id))
           .map(e => ({
@@ -383,28 +512,43 @@ export default function Home() {
         };
 
         // Update own LSDB
-        fromNode.ospfData.linkStateDatabase[fromNode.id] = lsa;
+        const updatedNode = JSON.parse(JSON.stringify(fromNode));
+        updatedNode.ospfData.linkStateDatabase[fromNode.id] = lsa;
 
         // Flood to all neighbors
         const neighborIds = neighbors.map(n => n.to);
         if (neighborIds.length > 0) {
-          const totalCost = neighbors.reduce((sum, n) => sum + n.cost, 0);
-          newLogs.push(`📤 OSPF LSA ORIGINATION: Router ${fromNode.id} originates Link State Advertisement (seq: ${lsa.sequenceNumber}) and floods to neighbors: ${neighborIds.join(', ')}. Advertising ${neighbors.length} links with total cost ${totalCost}. This forms the distributed link-state database.`);
-          const newPackets: Packet[] = neighborIds.map(neighborId => {
+          const links = neighbors.map(n => `${n.to}:${n.cost}`).join(', ');
+          newLogs.push(`  Router ${fromNode.id}: LSA seq=${lsa.sequenceNumber}, flooding to [${neighborIds.join(', ')}]`);
+          newLogs.push(`    My links: [${links}]`);
+          
+          neighborIds.forEach(neighborId => {
             const toNode = currentNodes.find(n => n.id === neighborId)!;
-            return {
+            allNewPackets.push({
               id: `lsa-${Date.now()}-${Math.random()}`,
               from: fromNode.id,
               to: neighborId,
               type: 'ospf-lsa',
-              data: lsa,
+              data: JSON.parse(JSON.stringify(lsa)), // Deep copy
               progress: 0,
               path: [{ x: fromNode.x, y: fromNode.y }, { x: toNode.x, y: toNode.y }]
-            };
+            });
           });
-          setPackets(p => [...p, ...newPackets]);
         }
+        
+        return updatedNode;
+      });
+      
+      // Update node state with new LSDBs
+      setNodes(updatedNodes);
+      
+      // Send all packets
+      if (allNewPackets.length > 0) {
+        setPackets(p => [...p, ...allNewPackets]);
       }
+    } else {
+      newLogs.push('');
+      newLogs.push('[LSA GENERATION] Network stable, no new LSAs needed');
     }
 
     // Add all logs from this step
@@ -412,17 +556,25 @@ export default function Home() {
       setLog(prevLog => [...newLogs.map(l => `[${new Date().toLocaleTimeString()}] ${l}`).reverse(), ...prevLog.slice(0, MAX_LOG_ENTRIES - newLogs.length)]);
     }
 
-    // 3. Convergence check
-    if (somethingChangedInNetwork) {
+    // Convergence check
+    if (somethingChangedInNetwork || packetsRef.current.length > 0) {
       convergenceCounter.current = 0;
     } else {
       convergenceCounter.current++;
     }
 
     const numNodes = nodesRef.current.length;
-    if (numNodes > 0 && convergenceCounter.current >= numNodes * 2) {
-      addLog("OSPF network has converged. Simulation paused.");
+    if (numNodes > 0 && convergenceCounter.current >= numNodes && packetsRef.current.length === 0) {
+      addLog('');
+      addLog('╔═══════════════════════════════════════════════════════╗');
+      addLog('║  [CONVERGENCE ACHIEVED]                                ║');
+      addLog('╚═══════════════════════════════════════════════════════╝');
+      addLog(`All routers have synchronized LSDBs. Network converged.`);
+      addLog('Dijkstra SPF computation complete. Routing tables are optimal.');
       setIsRunning(false);
+      setIsSimulating(false);
+    } else if (packetsRef.current.length === 0 && convergenceCounter.current > 0) {
+      addLog(`[STABILITY] ${convergenceCounter.current}/${numNodes} iterations stable`);
     }
 
     simulationStep.current++;
@@ -521,15 +673,20 @@ export default function Home() {
     return () => clearInterval(interval);
   }, [isRunning, speed, algorithm, runRipStep, runOspfStep]);
   
-  // Packet animation
+  // Packet animation - ONLY increments progress, does NOT remove packets
+  // Packet removal is handled by runRipStep/runOspfStep after processing
   useEffect(() => {
-    if (!packets.length && !isRunning) return;
+    if (packets.length === 0 && !isRunning) return;
     let animationFrameId: number;
     const animate = () => {
         setPackets(currentPackets => 
             currentPackets
-                .map(p => ({ ...p, progress: p.progress + 0.01 * speed }))
-                .filter(p => p.progress < 1.1) // Allow to slightly overshoot to be processed, then remove
+                .map(p => ({ 
+                  ...p, 
+                  // Slower animation: 0.005 * speed means packets take longer to traverse
+                  // Cap at 1.05 to prevent visual overflow beyond destination node
+                  progress: Math.min(p.progress + 0.005 * speed, 1.05) 
+                }))
         );
         animationFrameId = requestAnimationFrame(animate);
     };
