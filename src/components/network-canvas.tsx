@@ -5,7 +5,7 @@ import type { Node, Edge, Packet } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { RouterIcon } from "./icons";
 import { Button } from "./ui/button";
-import { Plus, Link2 } from "lucide-react";
+import { Plus, Link2, Trash2 } from "lucide-react";
 import {
   Tooltip,
   TooltipContent,
@@ -13,13 +13,14 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 
-type InteractionMode = "none" | "add-node" | "add-edge";
+type InteractionMode = "none" | "add-node" | "add-edge" | "delete-node";
 
 interface NetworkCanvasProps {
   nodes: Node[];
   edges: Edge[];
   packets: Packet[];
   onNodeAdd: (x: number, y: number) => void;
+  onNodeDelete: (nodeId: string) => void;
   onEdgeAdd: (from: string, to: string, bandwidth: number) => void;
   onNodeDrag: (id: string, x: number, y: number) => void;
   onEdgeToggle: (id: string) => void;
@@ -33,6 +34,7 @@ export function NetworkCanvas({
   edges,
   packets,
   onNodeAdd,
+  onNodeDelete,
   onEdgeAdd,
   onNodeDrag,
   onEdgeToggle,
@@ -55,6 +57,12 @@ export function NetworkCanvas({
   };
 
   const handleNodeClick = (nodeId: string) => {
+    if (mode === "delete-node") {
+      onNodeDelete(nodeId);
+      setMode("none");
+      return;
+    }
+    
     if (isSimulating) return;
     if (mode === "add-edge") {
       if (!edgeStartNode) {
@@ -124,6 +132,14 @@ export function NetworkCanvas({
               </TooltipTrigger>
               <TooltipContent><p>Add Edge (click two nodes)</p></TooltipContent>
             </Tooltip>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button variant={mode === 'delete-node' ? 'secondary' : 'ghost'} size="icon" onClick={() => setMode(m => m === 'delete-node' ? 'none' : 'delete-node')}>
+                  <Trash2 className="h-4 w-4" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent><p>Delete Node (click on node)</p></TooltipContent>
+            </Tooltip>
           </TooltipProvider>
         </div>
       </div>
@@ -175,7 +191,7 @@ export function NetworkCanvas({
                   x2={toNode.x}
                   y2={toNode.y}
                   className="stroke-[15] stroke-transparent pointer-events-auto cursor-pointer"
-                  onClick={() => !isSimulating && onEdgeToggle(edge.id)}
+                  onClick={() => onEdgeToggle(edge.id)}
                 />
                 {/* Edge cost/bandwidth label */}
                 <g transform={`translate(${midX + offsetX}, ${midY + offsetY})`}>
@@ -221,7 +237,11 @@ export function NetworkCanvas({
               "absolute w-16 h-16 transform -translate-x-1/2 -translate-y-1/2 select-none",
               "flex flex-col items-center justify-center rounded-full border-2",
               "bg-card transition-all duration-300",
-              isSimulating ? "cursor-not-allowed" : (mode === 'none' ? 'cursor-grab' : 'cursor-pointer'),
+              isSimulating ? "cursor-not-allowed" : (
+                mode === 'none' ? 'cursor-grab' : 
+                mode === 'delete-node' ? 'cursor-pointer hover:cursor-crosshair' :
+                'cursor-pointer'
+              ),
               edgeStartNode === node.id ? "border-accent ring-4 ring-accent/50" : "border-primary",
               draggingNode?.id === node.id ? "shadow-2xl scale-105 z-10 cursor-grabbing" : "",
               // Visual indicators for algorithm states
@@ -232,6 +252,7 @@ export function NetworkCanvas({
             )}
             style={{ left: node.x, top: node.y }}
             onClick={() => handleNodeClick(node.id)}
+            onDoubleClick={() => onNodeDelete(node.id)}
             onMouseDown={(e) => handleNodeMouseDown(e, node.id)}
           >
             <RouterIcon className={cn(
@@ -262,10 +283,12 @@ export function NetworkCanvas({
       </div>
        <div className="p-2 border-t text-center bg-card rounded-b-lg">
           <p className="text-xs text-muted-foreground">
-            {isSimulating ? "Simulation running... Pause to edit network." : 
-              mode === 'none' ? 'Click buttons to add nodes/edges, or drag nodes to move.' :
+            {isSimulating ? "Simulation running... Pause to edit network. Double-click nodes to delete." : 
+              mode === 'none' ? 'Click buttons to add nodes/edges, drag to move, double-click to delete nodes.' :
               mode === 'add-node' ? 'Click on the canvas to add a new router node.' :
-              'Click on two nodes to create an edge between them.'
+              mode === 'add-edge' ? 'Click on two nodes to create an edge between them.' :
+              mode === 'delete-node' ? 'Click on a node to delete it and all connected edges.' :
+              'Unknown mode'
             }
             {edgeStartNode && ` Selected node: ${edgeStartNode}. Click another node.`}
           </p>
