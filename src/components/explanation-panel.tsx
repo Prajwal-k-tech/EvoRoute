@@ -14,28 +14,27 @@ interface ExplanationPanelProps {
 const explanations = {
   rip: {
     title: "Routing Information Protocol (RIP)",
-    description: "A classic distance-vector routing protocol.",
+    description: "A distance-vector model based on RIP concepts, not a full protocol implementation.",
     details: [
       "RIP uses hop count as its sole routing metric. Every link between routers has a cost of 1 hop.",
-      "It is a distributed application of the Bellman-Ford algorithm. Routers periodically share their entire routing table with their immediate neighbors.",
-      "By receiving a neighbor's table, a router learns about the total cost (hop count) to reach all network destinations via that neighbor and updates its own table if a shorter path is found.",
+      "The simulator applies distance-vector updates: routers share their simulated routing tables with adjacent routers. It animates those updates instead of sending RIP packets.",
+      "A router compares each neighbor's advertised distance plus the link cost with its current route, accepting better alternatives and changed costs from the current next hop.",
       "RIP has a maximum hop count of 15. Any route with a cost of 16 is considered infinite, marking that destination as unreachable.",
-      "The Bellman-Ford algorithm guarantees convergence in at most V-1 iterations (where V is the number of nodes) when the network is stable.",
-      "Known Limitations: RIP can be slow to converge after a network failure. The 'counting to infinity' problem occurs when two routers form a routing loop, continuously advertising incrementing costs (2→3→4...→16) until reaching the infinity threshold. Solutions include split horizon (don't advertise routes back to their source) and route poisoning.",
+      "The demo stops after several unchanged update rounds. This is a simulator stopping rule, not a guarantee about real RIP timers or convergence.",
+      "After a link failure, routes can count to infinity as neighbors advertise stale information. This model does not implement split horizon or route poisoning.",
       "Use Case: Best suited for small, simple networks where simplicity is more important than fast convergence or optimal path selection.",
     ],
   },
   ospf: {
     title: "Open Shortest Path First (OSPF)",
-    description: "A link-state routing protocol using Dijkstra's algorithm.",
+    description: "A link-state model based on OSPF concepts and Dijkstra's algorithm, not a full protocol implementation.",
     details: [
-      "OSPF builds a complete map (topology) of the network in its Link-State Database (LSDB). Each router knows the entire network topology.",
-      "When a link state changes, the router floods a Link State Advertisement (LSA) to all other routers in the same area, ensuring all routers have synchronized information.",
+      "Each router builds a simulated Link-State Database (LSDB) from Link-State Advertisements (LSAs) flooded over the network. The model uses one area and does not send real OSPF packets.",
       "Each router independently runs Dijkstra's Shortest Path First (SPF) algorithm on its LSDB to calculate the shortest path tree and build its routing table.",
       "OSPF uses bandwidth-based cost metrics. In this simulation, cost = 10,000 / bandwidth_mbps. Higher bandwidth links have lower costs and are preferred.",
-      "Data Structures: Uses a MinHeap priority queue for Dijkstra's algorithm, ensuring O((V+E) log V) time complexity for shortest path computation.",
-      "Advantages: Converges much faster than RIP (typically seconds vs. minutes), completely avoids routing loops due to complete network visibility, and scales well with hierarchical areas.",
-      "Use Case: Preferred for medium to large enterprise networks requiring fast convergence, loop-free routing, and bandwidth-aware path selection.",
+      "Data Structures: Dijkstra uses a custom MinHeap but scans the full link list for each reachable router, adding O(VE) work to O((V+E) log V) heap work.",
+      "The computed tree is shortest for the topology currently in the LSDB. This demo does not model OSPF timers, retransmission, multi-area scaling, or real packet forwarding.",
+      "Use this simulator to compare routing ideas on small networks, not to predict production convergence time or loop behavior.",
     ],
   },
 };
@@ -89,4 +88,3 @@ export function ExplanationPanel({ algorithm, log }: ExplanationPanelProps) {
   );
 }
 
-    

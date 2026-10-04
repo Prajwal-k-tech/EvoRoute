@@ -43,7 +43,7 @@ export function RoutingTableDisplay({ nodes, isSimulating, algorithm }: RoutingT
       <CardHeader>
         <CardTitle>Routing Tables</CardTitle>
         <CardDescription>
-          {isSimulating ? 'Live updates from the simulation.' : 'Run simulation to populate tables.'}
+          {isSimulating ? 'Tables update when the simulation is running.' : 'Current routes for each router.'}
         </CardDescription>
       </CardHeader>
       <CardContent className="flex-1 p-0 overflow-hidden">
@@ -71,7 +71,7 @@ export function RoutingTableDisplay({ nodes, isSimulating, algorithm }: RoutingT
                           {tableEntries.sort((a, b) => a.destination.localeCompare(b.destination)).map((route) => {
                             const isInfinite = isRipRoute(route) && route.cost >= 16;
                             return (
-                            <TableRow 
+                            <TableRow
                               key={`${node.id}-${route.destination}`}
                               className={isInfinite ? "bg-destructive/10" : ""}
                             >
@@ -108,4 +108,4 @@ export function RoutingTableDisplay({ nodes, isSimulating, algorithm }: RoutingT
   );
 }
 
-    
+
